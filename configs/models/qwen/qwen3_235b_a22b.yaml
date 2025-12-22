@@ -8,3 +8,8 @@ read_cost: 0.2
 write_cost: 0.6
 human_readable_id: Qwen3-235B-A22B
 date: "2025-04-29"
+other_params:
+  open: true
+  creator: Qwen
+  parameters: 235
+  active_parameters: 22

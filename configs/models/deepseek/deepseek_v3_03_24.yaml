@@ -7,3 +7,8 @@ read_cost: 0.27
 write_cost: 1.10
 human_readable_id: DeepSeek-V3-03-24
 date: "2025-03-24"
+other_params:
+  open: true
+  creator: DeepSeek
+  parameters: 671
+  active_parameters: 37

@@ -6,11 +6,15 @@ import json
 import os
 from loguru import logger
 from collections import OrderedDict
+import random
 
 
 class RequestLogger:
     def __init__(self):
         self.log_dir = "logs/requests"
+        self.comp_name = None
+        self.solver_name = None
+        self.batch_idx_to_problem_idx = None
 
     def set_metadata(self, comp_name, solver_name, batch_idx_to_problem_idx):
         self.comp_name = comp_name
@@ -18,8 +22,12 @@ class RequestLogger:
         self.batch_idx_to_problem_idx = batch_idx_to_problem_idx
 
     def log_request(self, ts, batch_idx, request, **info):
-        problem_idx = self.batch_idx_to_problem_idx[batch_idx]
-        logfile = f"{self.log_dir}/{self.comp_name}/{self.solver_name}/{ts}_p{problem_idx}_idx{batch_idx}.json"
+        if self.comp_name is None:
+            problem_idx = -1
+            logfile = f"{self.log_dir}/uninitialized_{ts}_idx{batch_idx}.json"
+        else:
+            problem_idx = self.batch_idx_to_problem_idx[batch_idx]
+            logfile = f"{self.log_dir}/{self.comp_name}/{self.solver_name}/{ts}_p{problem_idx}_idx{batch_idx}.json"
         os.makedirs(os.path.dirname(logfile), exist_ok=True)
         if os.path.exists(logfile):
             logger.warning(f"Can't log request, log file already exists: {logfile}")
@@ -41,8 +49,11 @@ class RequestLogger:
             json.dump(data, f, indent=4)
 
     def log_response(self, ts, batch_idx, response, **info):
-        problem_idx = self.batch_idx_to_problem_idx[batch_idx]
-        logfile = f"{self.log_dir}/{self.comp_name}/{self.solver_name}/{ts}_p{problem_idx}_idx{batch_idx}.json"
+        if self.comp_name is None:
+            logfile = f"{self.log_dir}/uninitialized_{ts}_idx{batch_idx}.json"
+        else:
+            problem_idx = self.batch_idx_to_problem_idx[batch_idx]
+            logfile = f"{self.log_dir}/{self.comp_name}/{self.solver_name}/{ts}_p{problem_idx}_idx{batch_idx}.json"
         if not os.path.exists(logfile):
             logger.warning(f"Can't log response, log file does not exist: {logfile}")
             return

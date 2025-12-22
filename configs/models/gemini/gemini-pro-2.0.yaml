@@ -10,3 +10,6 @@ read_cost: 1.2
 write_cost: 5
 human_readable_id: gemini-2.0-pro
 date: "2025-02-05"
+other_params:
+  open: false
+  creator: Google

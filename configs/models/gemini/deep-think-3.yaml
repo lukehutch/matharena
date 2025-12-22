@@ -1,0 +1,15 @@
+model: models/gdm-eval-model-bcn
+human_readable_id: Gemini Deep Think 3
+api: google
+concurrent_requests: 1
+read_cost: 1.25
+write_cost: 10.00
+date: "2025-11-15"
+max_tokens: 250000
+tool_choice: auto
+extra_body:
+  extra_body:
+    google:
+      thinking_config:
+        include_thoughts: true
+use_gdm_tools: false

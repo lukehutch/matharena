@@ -1,10 +1,11 @@
-from json import tool
-from re import I
-import sympy
-from loguru import logger
 import json
 import os
 import time
+from json import tool
+from re import I
+
+import sympy
+from loguru import logger
 
 
 def save_run_for_recovery(came_from, original_path, solver_response, grader_response):
@@ -114,9 +115,10 @@ def normalize_conversation(messages):
         cm = {}
         if "role" not in m:
             role = "assistant"
-            logger.warning(
-                f"Message missing role, defaulting to 'assistant'. This is fully expected for GPT models with response API on Euler with tool use.\n Message: {m}"
-            )
+            if m.get("type", "") != "reasoning":
+                logger.warning(
+                    f"Message missing role, defaulting to 'assistant'. This is fully expected for GPT models with response API on Euler with tool use.\n"
+                )
         else:
             role = m["role"]
 
@@ -129,13 +131,13 @@ def normalize_conversation(messages):
             continue
 
         # Tool response
-        if role in ["tool", "function_call_output", "tool_response"]:
+        if role in ["tool", "function_call_output", "tool_response"] or m.get("type", None) == "function_call_output":
             cm["role"] = "tool_response"
             cm["content"] = m.get("content", m.get("output", ""))
 
             # There has to be a tool call this replies to
             if pending_tool_calls <= 0:
-                raise ValueError(f"Tool response without a pending tool call at: {m}")
+                logger.warning(f"Tool response without a pending tool call at: {m}")
             pending_tool_calls -= 1
 
             # Get tool name
@@ -150,7 +152,7 @@ def normalize_conversation(messages):
                 cm["tool_call_id"] = m.get("tool_call_id", m.get("id", m.get("call_id")))
             else:
                 cm["tool_call_id"] = None
-            check_for_extra_keys(m, ["role", "content", "tool_name", "tool_call_id", "id"])
+            check_for_extra_keys(m, ["role", "type", "content", "tool_name", "tool_call_id", "id", "call_id", "name", "output"])
             clean_messages.append(cm)
             continue
 
@@ -169,21 +171,19 @@ def normalize_conversation(messages):
 
         # External tool call
         if role in ["function", "function_call", "code"] or (
-            role == "assistant" and m.get("type", None) == "tool_call"
+            role == "assistant" and m.get("type", None) in ["tool_call", "function_call"]
         ):
             cm["role"] = "assistant"
             cm["type"] = "tool_call"
 
             # Sometimes it's a json string with arguments
-            try:
-                toolcall_dict = json.loads(m["content"]) if m.get("content", None) is not None else None
-            except json.JSONDecodeError:
-                if "tool_arguments" in m["content"]:
-                    logger.warning(f"Should have probably been able to parse as JSON...")
-                    import code
-
-                    code.interact(local=dict(globals(), **locals()))
-                toolcall_dict = None
+            if "content" in m:
+                try:
+                    toolcall_dict = json.loads(m["content"]) if m.get("content", None) is not None else None
+                except json.JSONDecodeError:
+                    if "tool_arguments" in m["content"]:
+                        logger.warning(f"Should have probably been able to parse as JSON...")
+                    toolcall_dict = None
 
             # Get tool name
             if "tool_name" in m or "name" in m:
@@ -217,7 +217,10 @@ def normalize_conversation(messages):
                 cm["arguments"] = {"code": m["content"]}  # for backward compatibility
                 logger.warning(f"Tool call missing arguments at: {m}, defaulting to just code")
 
-            check_for_extra_keys(m, ["role", "content", "type", "tool_name", "tool_call_id", "id", "arguments"])
+            check_for_extra_keys(
+                m, ["role", "content", "type", "tool_name", "name", "tool_call_id", "id", "call_id", "arguments"]
+            )
+
             clean_messages.append(cm)
             pending_tool_calls += 1
             continue
@@ -227,19 +230,25 @@ def normalize_conversation(messages):
         cm["role"] = "assistant"
         cm["content"] = m.get("content", m.get("output", ""))
         if m.get("type", None) in ["cot", "thinking", "reasoning"]:
+            if (cm["content"] is None or len(cm["content"]) == 0) and m.get("summary", None) is not None:
+                # "Summary" OpenAI case so patch the content from summary blocks
+                summary = ""
+                for thought in m["summary"]:
+                    if thought["text"] is not None:
+                        summary += "<thought>" + "\n" + thought["text"] + "\n" + "</thought>\n"
+                cm["content"] = summary
             cm["type"] = "cot"
             clean_messages.append(cm)
         elif "type" not in m or m["type"] == "response":
             cm["type"] = "response"
             has_cot = False
+            if "<thought>" in cm["content"] or "</thought>" in cm["content"]:
+                cm["content"] = cm["content"].replace("<thought>", "<think>").replace("</thought>", "</think>")
             if "<think>" in cm["content"] or "</think>" in cm["content"]:
                 cot_tag = "think"
                 has_cot = True
-            elif "<thought>" in cm["content"] or "</thought>" in cm["content"]:
-                cot_tag = "thought"
-                has_cot = True
+            
             if has_cot:
-                logger.warning(f"Response message contains CoT; splitting off")
                 cot_start = cm["content"].find(f"<{cot_tag}>")
                 if cot_start == -1:
                     cot_start = 0  # Some of our traces have only the end tag
@@ -251,9 +260,9 @@ def normalize_conversation(messages):
                 }
                 clean_messages.append(thinking_message)
                 cm["content"] = (cm["content"][:cot_start] + cm["content"][cot_end:]).strip()
-                assert (
-                    "think>" not in cm["content"] and "thought>" not in cm["content"]
-                ), f"Multiple CoT tags in message: {m}"
+                # assert (
+                #     "think>" not in cm["content"] and "thought>" not in cm["content"]
+                # ), f"Multiple CoT tags in message: {m}"
             clean_messages.append(cm)
         else:
             raise ValueError(f"Unknown assistant type: {m['type']}")
@@ -269,9 +278,22 @@ def normalize_conversation(messages):
                 cm["tool_call_id"] = tc["id"]
                 cm["arguments"] = tc["function"]["arguments"]
                 clean_messages.append(cm)
-                check_for_extra_keys(tc, ["function", "id", "type"])
+                check_for_extra_keys(tc, ["function", "extra_content", "id", "type", "index"])
                 pending_tool_calls += 1
-        ignored_keys = ["refusal", "annotations", "function_call", "audio", "id", "extra_content"]
+        ignored_keys = [
+            "refusal",
+            "annotations",
+            "function_call",
+            "audio",
+            "id",
+            "extra_content",
+            "reasoning_details",
+            "reasoning_content",
+            "encrypted_content",
+            "status",
+            "summary",
+            "thought_signature",
+        ]
         all_keys = ["role", "content", "type", "tool_calls"] + ignored_keys
         check_for_extra_keys(m, all_keys)
     return clean_messages

@@ -7,3 +7,8 @@ concurrent_requests: 16
 reasoning_effort: high
 human_readable_id: GPT OSS 20B (high)
 date: "2025-08-05"
+other_params:
+  open: true
+  creator: OpenAI
+  parameters: 21
+  active_parameters: 3.6

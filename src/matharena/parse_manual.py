@@ -46,6 +46,11 @@ manual_mapper = {
     "\\{\\,2,\\ 3,\\ \\tfrac{3}{2}\\pm\\tfrac{\\sqrt{3}}{2}i\\,\\}": "\\{2,3,\\frac{3}{2}+\\frac{\\sqrt{3}*i}{2},\\frac{3}{2}-\\frac{\\sqrt{3}*i}{2}\\}",
     "\\{\\,2,\\ 3,\\ 2+e^{2\\pi i/3},\\ 2+e^{4\\pi i/3}\\,\\}=\\{\\,2,\\ 3,\\ \\tfrac{3}{2}\\pm \\tfrac{\\sqrt{3}}{2}i\\,\\}": "\\{2,3,\\frac{3}{2}+\\frac{\\sqrt{3}*i}{2},\\frac{3}{2}-\\frac{\\sqrt{3}*i}{2}\\}",
     "\\displaystyle \\frac{737}{39}\\;\\text{(about }18.9\\text{ cards)}": "\\frac{737}{39}",
+    "\\frac{\\binom{2024}{990}+23}{46}": "\\frac{1}{46}\\binom{2024}{990}+\\frac{1}{2}",
+    "2, 3, \\frac{3 \pm i\\sqrt{3}}{2}": "2,3,\\frac{3 + i\\sqrt{3}}{2}, \\frac{3 - i\\sqrt{3}}{2}",
+    "2, 3, \\frac{3 \\pm i \\sqrt{3}}{2}": "2,3,\\frac{3 + i\\sqrt{3}}{2}, \\frac{3 - i\\sqrt{3}}{2}",
+    "(N+1)^2(4N+1)": "4N^3+9N^2+6N+1",
+    "(N+1)^2 (4N+1)": "4N^3+9N^2+6N+1",
 }
 
 # maps a full response to the answer, in case no \boxed{} is present

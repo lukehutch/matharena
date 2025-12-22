@@ -5,5 +5,10 @@ temperature: 0.6
 top_p: 0.95
 read_cost: 0.28
 write_cost: 0.42
-human_readable_id: DeepSeek-v3.2 (Think)
+human_readable_id: DeepSeek-v3.2-Exp (Think)
 date: "2025-09-29"
+other_params:
+  open: true
+  creator: DeepSeek
+  parameters: 671
+  active_parameters: 37

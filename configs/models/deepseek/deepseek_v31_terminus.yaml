@@ -1,0 +1,14 @@
+model: deepseek-reasoner
+api: deepseek
+max_tokens: 64000
+temperature: 0.6
+top_p: 0.95
+read_cost: 0.55
+write_cost: 2.19
+human_readable_id: DeepSeek-v3.1-Terminus
+date: "2025-09-22"
+other_params:
+  open: true
+  creator: DeepSeek
+  parameters: 671
+  active_parameters: 37

@@ -8,3 +8,6 @@ concurrent_requests: 10
 reasoning_effort: high
 temperature: 0.2
 date: "2025-04-09"
+other_params:
+  open: false
+  creator: xAI

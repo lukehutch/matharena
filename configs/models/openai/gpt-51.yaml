@@ -1,0 +1,18 @@
+model: gpt-5.1--high
+api: openai
+max_tokens: 128000
+read_cost: 1.25
+write_cost: 10
+concurrent_requests: 32
+temperature: null
+top_p: null
+human_readable_id: GPT-5.1 (high)
+batch_processing: false
+background: true
+use_openai_responses_api: true
+date: "2025-11-12"
+reasoning:
+  summary: "auto"
+other_params:
+  open: false
+  creator: OpenAI

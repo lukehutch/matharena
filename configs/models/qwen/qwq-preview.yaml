@@ -7,3 +7,8 @@ read_cost: 1.2
 write_cost: 1.2
 human_readable_id: QwQ-32B-Preview
 date: "2024-11-27"
+other_params:
+  open: true
+  creator: Qwen
+  parameters: 32
+  active_parameters: 32

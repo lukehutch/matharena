@@ -12,7 +12,6 @@
   </a>
 </div>
 
-[Oct 20, 2025] We refactored the codebase and updated the README accordingly. This includes breaking changes but should make it easier to run and debug evals. Please open a GitHub issue if you encounter any problems.
 
 ## 👋 Overview
 
@@ -89,6 +88,7 @@ uv run python scripts/run.py --comp aime/aime_2025 --models openai/gpt-4o
 **Additional Flags:**
 - `--n`: Number of runs per problem (default: 4).
 - `--redo-all`: Ignore existing runs for this model and rerun everything (default: false, continues from existing runs found in `outputs/`).
+- `--problems`: One-based indices of problems to run (default: runs all problems).
 
 ### What Does This Do?
 

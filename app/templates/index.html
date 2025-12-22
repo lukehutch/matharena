@@ -1,0 +1,30 @@
+
+{% extends "base.html" %}
+
+{% block sidebar %}
+    {% for model, model_stats in stats.items() %}
+        <a href="{{ url_for('model_view', model=model) }}" class="sidebar-item">{{ model }} ({{ model_stats.n_correct }} / {{ model_stats.n_solutions }})
+            <div class="progress-bar-container">
+                <div class="progress-bar-fill" style="width: {{ model_stats.avg_accuracy }};">
+                </div>
+            </div>
+
+        </a>
+    {% endfor %}
+{% endblock %}
+
+{% block content %}
+    {% for model, model_stats in stats.items() %}
+        <h3>Model: {{ model }}</h3>
+        <div>
+            <p class="strong">Avg Acc: {{ model_stats.avg_accuracy }} ({{ model_stats.nb_problems }} problems)</p>
+            <p class="strong">Cost: ${{ model_stats.total_cost }}</p>
+            <div>
+                <a href="javascript:void(0)" class="sidebar-item copy-button" onclick="copyToClipboard()">📋</a>
+                {% for stat in model_stats.problem_stats %}
+                    <p class="problem-stats">{{ stat }}</p>
+                {% endfor %}
+            </div>
+        </div>
+    {% endfor %}
+{% endblock %}

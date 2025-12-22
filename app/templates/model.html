@@ -1,0 +1,29 @@
+
+{% extends "base.html" %}
+
+{% block sidebar %}
+    {% if sidebar.euler_agent %}
+        <a href="{{ url_for('euler_agent') }}" class="sidebar-item">(((Euler Agent Checkpoints)))</a>
+    {% endif %}
+    <a href="{{ url_for('model_view', model=sidebar.current_model) }}" class="sidebar-item strong current">  {{ sidebar.current_model }}</a>
+    <div class="expanded">
+    {% for problem, data in sidebar.problems.items() %}
+        <a href="{{ url_for('problem_view', model=sidebar.current_model, problem_name=problem) }}" class="sidebar-item">{{ data.name }} {{ data.ticks }}</a>
+    {% endfor %}
+    </div>
+   
+{% endblock %}
+
+{% block content %}
+    <h3 style="text-align: left;">Model: {{ model }}</h3>
+    <div>
+        <p class="strong">Avg Acc: {{ stats.avg_accuracy }} ({{ stats.nb_problems }} problems)</p>
+        <p class="strong">Cost: ${{ stats.total_cost }}</p>
+        <div>
+            <a href="javascript:void(0)" class="sidebar-item copy-button" onclick="copyToClipboard()">📋</a>
+            {% for stat in stats.problem_stats %}
+                <p class="problem-stats">{{ stat }}</p>
+            {% endfor %}
+        </div>
+    </div>
+{% endblock %}

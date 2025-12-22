@@ -8,3 +8,6 @@ batch_processing: false
 use_openai_responses_api: true
 date: "2025-04-16"
 concurrent_requests: 4
+other_params:
+  open: false
+  creator: OpenAI

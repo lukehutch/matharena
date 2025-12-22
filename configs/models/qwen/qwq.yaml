@@ -9,3 +9,8 @@ write_cost: 1.2
 human_readable_id: QwQ-32B
 date: "2025-03-05"
 concurrent_requests: 1
+other_params:
+  open: true
+  creator: Qwen
+  parameters: 32
+  active_parameters: 32

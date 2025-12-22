@@ -87,6 +87,8 @@ class Runs:
     def save_to_file(self):
         """Saves runs to a JSON file."""
         runs_dict = self.to_dict()
+        if self.N == 0:
+            return
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump(runs_dict, f, indent=4, ensure_ascii=False)
 
@@ -149,9 +151,6 @@ class Runs:
         # Load raw data, if missing patch
         self.messages = runs_dict["messages"]
         assert len(self.messages) == self.N
-        for m in self.messages:
-            if self.solver_type == "agent" and len(m) != 2:
-                logger.warning(f"Agent messages must be [user, assistant], got {m}")
         self.judgment = runs_dict.get("judgment", [None for _ in range(self.N)])
         self.history = runs_dict.get("history", [[None] for _ in range(self.N)])
         assert len(self.history) == self.N
@@ -258,7 +257,7 @@ class Runs:
     def update_aggregates(self):
         self.N = len(self.messages)
         self.cost = {}
-        for k in ["cost", "input_tokens", "output_tokens", "time"]:
+        for k in ["cost", "input_tokens", "output_tokens", "time", "retries", "request_time"]:
             vals = [dc.get(k, None) for dc in self.detailed_costs]
             if any(v is None for v in vals):
                 self.cost[k] = None
@@ -290,14 +289,13 @@ class Runs:
         # Clean and validate messages and history
         try:
             clean_conversation = normalize_conversation(solver_response.conversation)
-            if self.solver_type == "agent" and len(clean_conversation) != 2:
-                raise ValueError(f"Agent messages should be [user, assistant], got {clean_conversation}")
             history = solver_response.history
             self.validate_history(history)
             if history is not None:
                 for i in range(len(history)):
                     history[i]["messages"] = normalize_conversation(history[i]["messages"])
         except Exception as e:  # noqa E722
+            logger.error(f"Error during normalization or history validation: {e}")
             save_run_for_recovery("runs add_run", self.path, solver_response, grader_response)
             raise
 
@@ -355,4 +353,4 @@ class Runs:
             assert "timestep" in h and isinstance(h["timestep"], int)
             assert "messages" in h and isinstance(h["messages"], list)
             steps.add(h["step"])
-        assert len(steps) == len(history), "Duplicate step names in history"
+        # assert len(steps) == len(history), "Duplicate step names in history"

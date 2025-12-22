@@ -20,12 +20,14 @@ class BaseSolver:
         self.default_api_client_args = default_api_client_args
         self.last_chance_prompt = last_chance_prompt
 
-    def solve_batch(self, stmt_batch: list[tuple[str, Any]]):
+    def solve_batch(self, stmt_batch: list[tuple[str, Any]], batch_idx_to_problem_idx: dict[int, int], batch_idx_to_run_idx: dict[int, int]):
         """
         Solves a batch of problems.
 
         Args:
             stmt_batch (list[tuple[str, Any]]): A list of problem statements (text, image) to be solved.
+            batch_idx_to_problem_idx (dict[int, int]): A mapping from batch indices to original problem indices.
+            batch_idx_to_run_idx (dict[int, int]): A mapping from batch indices to run indices.
 
         Yields:
             solver_response: A SolverResponse object containing the index, conversation, detailed cost, and history for each problem.

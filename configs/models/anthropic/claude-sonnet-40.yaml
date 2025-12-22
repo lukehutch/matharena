@@ -9,3 +9,6 @@ write_cost: 15
 batch_processing: false
 human_readable_id: Claude-Sonnet-4.0
 date: "2025-05-26"
+other_params:
+  open: false
+  creator: Anthropic

@@ -7,3 +7,8 @@ read_cost: 0.2
 write_cost: 0.6
 human_readable_id: DeepSeek-R1-Distill-70B
 date: "2025-01-21"
+other_params:
+  open: true
+  creator: DeepSeek
+  parameters: 70
+  active_parameters: 70

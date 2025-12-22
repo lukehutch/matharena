@@ -9,3 +9,6 @@ read_cost: 0
 write_cost: 0
 human_readable_id: Gemini IMO Deep Think
 date: "2025-07-25"
+other_params:
+  open: false
+  creator: Google

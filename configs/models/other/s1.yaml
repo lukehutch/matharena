@@ -7,3 +7,8 @@ read_cost: 0
 write_cost: 0
 human_readable_id: s1.1-32B
 date: "2025-03-01"
+other_params:
+  open: true
+  creator: Stanford
+  parameters: 32
+  active_parameters: 32

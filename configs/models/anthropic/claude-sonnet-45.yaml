@@ -12,3 +12,6 @@ date: "2025-09-29"
 thinking:
   type: enabled 
   budget_tokens: 32000
+other_params:
+  open: false
+  creator: Anthropic

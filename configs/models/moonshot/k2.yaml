@@ -8,3 +8,8 @@ read_cost: 0.57
 write_cost: 2.30
 human_readable_id: Kimi K2
 date: "2025-07-11"
+other_params:
+  open: true
+  creator: Moonshot AI
+  parameters: 1000
+  active_parameters: 32

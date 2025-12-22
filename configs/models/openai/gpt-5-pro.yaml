@@ -1,0 +1,17 @@
+model: gpt-5-pro-2025-10-06
+api: openai
+max_tokens: 270000
+read_cost: 15
+write_cost: 120
+concurrent_requests: 8
+temperature: null
+top_p: null
+human_readable_id: GPT-5-Pro
+batch_processing: false
+background: true
+use_openai_responses_api: true
+use_openai_responses_api_tools: false
+date: "2025-10-06"
+other_params:
+  open: false
+  creator: OpenAI

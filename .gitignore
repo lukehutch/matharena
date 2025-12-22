@@ -38,3 +38,6 @@ scripts/postprocess*
 scripts/analyses
 scripts/curation/*.sh
 scripts/extraction/timeline.py
+mds
+logs/
+scripts/euler/

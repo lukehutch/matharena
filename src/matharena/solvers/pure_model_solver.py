@@ -19,12 +19,14 @@ class PureModelSolver(BaseSolver):
         self.client = APIClient(**default_api_client_args)
 
     @override
-    def solve_batch(self, stmt_batch: list[tuple[str, Any]]):
+    def solve_batch(self, stmt_batch: list[tuple[str, Any]], batch_idx_to_problem_idx: dict[int, int], batch_idx_to_run_idx: dict[int, int]):
         """
         Solves a batch of problems.
 
         Args:
             stmt_batch (list[tuple[str, Any]]): A batch of problem statements as (text, image) pairs.
+            batch_idx_to_problem_idx (dict[int, int]): A mapping from batch indices to original problem indices.
+            batch_idx_to_run_idx (dict[int, int]): A mapping from batch indices to run indices.
 
         Yields:
             solver_response: A SolverResponse object containing the batch_index, the conversation array, detailed cost, and history for each problem.

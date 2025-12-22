@@ -3,17 +3,16 @@ Cleanly nukes only a single run from a given output json.
 """
 
 import argparse
+import json
 import os
 
-import json
 import yaml
 from loguru import logger
 
 from matharena.grader import extract_and_grade
 from matharena.runner import Runner
 from matharena.runs import Runs
-from matharena.grader import extract_and_grade
-from matharena.utils import normalize_conversation, is_conversation_broken
+from matharena.utils import is_conversation_broken, normalize_conversation
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--path", type=str)
@@ -31,7 +30,7 @@ api = toks[-3]
 solver = toks[-2]
 print(f"Processing {comp} {api} {solver}")
 
-runner = Runner(comp, args.n, args.comp_configs_dir, None, args.output_dir, False)
+runner = Runner(comp, args.n, None, args.comp_configs_dir, None, args.output_dir, False)
 
 solver_config_path = f"{args.model_configs_dir}/{api}/{solver}.yaml"
 with open(solver_config_path, "r") as f:

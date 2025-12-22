@@ -1,4 +1,4 @@
 type: agent
-model_config: models/xai/grok-4-fast
+model_config: models/xai/grok-4-fast-reasoning
 scaffold_config: agent_scaffolds/selfcheck
 human_readable_id: Grok 4 Fast (Reasoning) (Selfcheck Agent)

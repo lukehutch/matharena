@@ -7,6 +7,8 @@ from collections import defaultdict
 
 from loguru import logger
 
+from matharena.tools.submit_answer import check_hash_match
+
 from matharena.utils import is_conversation_broken
 from matharena.parser import WarningType, check_answers, extract_answer, parse_answer
 
@@ -147,6 +149,7 @@ def extract_and_grade(messages, output_tokens, gold_answer, competition_config, 
 
     is_final_answer = competition_config.get("final_answer", True)
     use_strict_parsing = competition_config.get("strict_parsing", False)
+
     gold_answer_is_list = is_final_answer and "," in gold_answer
     typed_gold_answer, _ = parse_answer(gold_answer, list_answer=gold_answer_is_list)
 
@@ -158,6 +161,14 @@ def extract_and_grade(messages, output_tokens, gold_answer, competition_config, 
     model_answer, warning = extract_answer(
         last_message, strict_parsing=use_strict_parsing, parse=True, list_answer=gold_answer_is_list
     )
+
+    if gold_answer.startswith("hash:"):
+        hval = gold_answer.split(":")[1]
+        if check_hash_match(str(model_answer), hval):
+            return model_answer, True, warning.value
+        else:
+            return model_answer, False, warning.value
+
     is_correct = check_answers(model_answer, typed_gold_answer)
     if not is_correct and check_output_length(output_tokens):
         logger.warning(

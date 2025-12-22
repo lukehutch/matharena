@@ -16,6 +16,7 @@ if __name__ == "__main__":
     parser.add_argument("--comp", type=str, help="Competition name", required=True)
     parser.add_argument("--output-folder", type=str, default="outputs", help="Output directory for the dataset")
     parser.add_argument("--data-folder", type=str, default="data", help="Output directory for the dataset")
+    parser.add_argument("--local-save-path", type=str, default=None, help="If specified, save the dataset locally to this path instead of uploading to Hugging Face")
 
     parser.add_argument("--configs-folder", type=str, default="configs/models", help="Directory containing the configs of the models")
     parser.add_argument("--competition-configs-folder", type=str, default="configs/competitions", help="Directory containing the configs")
@@ -43,6 +44,8 @@ if __name__ == "__main__":
     all_data = []
 
     for config_path in configs:
+        if "tiiuae" in config_path:
+            continue # skip tiiuae models for now due to model being private
         folder_model = os.path.join(folder, config_path)
         if not os.path.exists(folder_model):
             logger.info(f"Folder {folder_model} does not exist, skipping...")
@@ -71,6 +74,7 @@ if __name__ == "__main__":
                     "model_name": configs[config_path]["human_readable_id"],
                     "model_config": config_path,
                     "idx_answer": i,
+                    "all_messages": data["messages"][i],
                     "user_message": data["messages"][i][0]["content"],
                     "answer": data["messages"][i][-1]["content"],
                     "input_tokens": data["detailed_costs"][i]["input_tokens"],
@@ -82,6 +86,9 @@ if __name__ == "__main__":
 
                 if "source" in data:
                     default_dict["source"] = data["source"]
+
+                if "history" in data:
+                    default_dict["history"] = data["history"]
 
                 if competition_config.get("final_answer", True):
                     extra_dict = {
@@ -105,8 +112,6 @@ if __name__ == "__main__":
     df = pd.DataFrame(all_data)
     if "parsed_answer" in df.columns:
         df["parsed_answer"] = df["parsed_answer"].astype(str)
-    if "source" in df.columns:
-        df = df[df["source"].apply(lambda x: "smt" not in x.lower())]
     
     if not args.visual_dataset:
         logger.info(f"Uploading dataset with {len(df)} samples to dataset {args.repo_name} in org {args.org}")

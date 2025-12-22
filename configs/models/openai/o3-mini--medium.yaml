@@ -7,3 +7,6 @@ human_readable_id: o3-mini (medium)
 batch_processing: true
 use_openai_responses_api: true
 date: "2025-01-31"
+other_params:
+  open: false
+  creator: OpenAI

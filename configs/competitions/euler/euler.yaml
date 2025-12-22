@@ -1,5 +1,5 @@
 competition: euler
-dataset_path: MathArena/project_euler
+dataset_path: data/euler/euler
 date:
   '943': '2025-05-04'
   '944': '2025-05-11'
@@ -24,21 +24,30 @@ date:
   '963': '2025-10-05'
   '964': '2025-10-12'
   '965': '2025-10-18'
+  '966': '2025-10-25'
+  '967': '2025-11-01'
+  '968': '2025-11-09'
+  '969': '2025-11-16'
+  '970': '2025-11-16'
+  '971': '2025-11-27'
+  '972': '2025-12-01'
+  '973': '2025-12-06'
+  '974': '2025-12-13'
 instruction: "You are solving a problem from Project Euler. \nAs a tool you can use,\
   \ you are given access to a code execution environment. Invoke that tool to execute\
-  \ Python or C++ code. You can execute code up to 20 times, so you can use them quite\
-  \ liberally.\nYou can also use the tool to run code that helps you reason about\
-  \ the problem, but does not directly compute the final answer.\nAnswers that consist\
-  \ of code are not accepted, I will only accept a final answer to the question that\
-  \ does not require me to run any code you produce, as you should use the tool for\
-  \ this.\nYou are REQUIRED to use the tool to compute the final answer. It is impossible\
-  \ to solve this problem without using the tool. \nInstead, your code should compute\
-  \ the answer (via the tool), after which you should put your final answer within\
-  \ \\boxed{{}}.\nYour answer should be correctly formatted by putting your final\
-  \ answer within \\boxed{{}}, i.e., end your reply with \"### Final answer: \\\\\
-  boxed{{your_answer_here}}\".\n"
-max_tool_calls: 20
-n_problems: 23
+  \ Python or C++ code. You can execute code up to 500 times, so you can use them\
+  \ quite liberally.\nYou can also use the tool to run code that helps you reason\
+  \ about the problem, but does not directly compute the final answer.\nAnswers that\
+  \ consist of code are not accepted, I will only accept a final answer to the question\
+  \ that does not require me to run any code you produce, as you should use the tool\
+  \ for this.\nYou are REQUIRED to use the tool to compute the final answer. It is\
+  \ impossible to solve this problem without using the tool. \nInstead, your code\
+  \ should compute the answer (via the tool), after which you should put your final\
+  \ answer within \\boxed{{}}.\nYour answer should be correctly formatted by putting\
+  \ your final answer within \\boxed{{}}, i.e., end your reply with \"### Final answer:\
+  \ \\\\boxed{{your_answer_here}}\".\n"
+max_tool_calls: 500
+n_problems: 32
 strict_parsing: false
 tools:
 - tool_spec:
@@ -62,6 +71,8 @@ tools:
         - lang
         type: object
     type: function
+  tool_spec_gdm:
+    name: code_execution
   tool_spec_openai_responses_api:
     container:
       type: auto

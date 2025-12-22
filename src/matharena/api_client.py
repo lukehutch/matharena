@@ -6,6 +6,7 @@ import tempfile
 import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 
 import anthropic
 import requests
@@ -33,22 +34,26 @@ class APIClient:
     def __init__(
         self,
         model,
-        timeout=9000,
+        timeout=18000,
         max_tokens=None,
         api="openai",
         max_retries=10,
         max_retries_inner=5,
         concurrent_requests=30,
         no_system_messages=False,
+        context_limit=None,
+        background=False,
         read_cost=1,
         write_cost=1,
         sleep_on_error=60,
         sleep_after_request=0.1,
+        include_max_tool_calls=True,
         throw_error_on_failure=False,
         max_tokens_param="max_tokens",
         reasoning_effort=None,
         batch_processing=False,
         use_openai_responses_api=False,
+        use_gdm_tools=False,
         max_tool_calls=0,
         tools=None,
         **kwargs,
@@ -72,10 +77,24 @@ class APIClient:
             reasoning_effort (str, optional): The reasoning effort to use. Defaults to None.
             batch_processing (bool, optional): Whether to use batch processing. Defaults to False.
             use_openai_responses_api (bool, optional): Whether to use OpenAI responses. Defaults to False.
-            max_tool_calls (int, optional): The maximum number of tool calls to make. Defaults to 0.
+            max_tool_calls (int|dict, optional): The maximum number of tool calls to make. Defaults to 0.
+                Could also be a dict that specifies max calls per tool name.
             tools (list, optional): A list of tools to use. Defaults to None.
             **kwargs: Additional keyword arguments for the API.
         """
+        # Max tool calls
+        self.tool_calls_allowed = False
+        if isinstance(max_tool_calls, int):
+            self.max_tool_calls = {"any": max_tool_calls}
+            self.max_tool_calls_mode = "total"
+            if max_tool_calls > 0:
+                self.tool_calls_allowed = True
+        elif isinstance(max_tool_calls, dict):
+            self.max_tool_calls = max_tool_calls
+            self.max_tool_calls_mode = "per_tool"
+            if sum(max_tool_calls.values()) > 0:
+                self.tool_calls_allowed = True
+
         # Adapt model name and other args to the model
         if "--" in model:
             model, reasoning_effort = model.split("--")
@@ -90,12 +109,14 @@ class APIClient:
                 max_tokens_param = "max_completion_tokens"
         if use_openai_responses_api and not batch_processing:
             max_tokens_param = "max_output_tokens"
-        if max_tool_calls > 0 and not use_openai_responses_api:
+        if self.tool_calls_allowed and not use_openai_responses_api:
             max_tokens_param = "max_completion_tokens"
         self._kwarg_remover(api, model, kwargs)
 
         self.model = model
         self.kwargs = kwargs
+        self.max_tokens_param = max_tokens_param
+        self.context_limit = context_limit
         if max_tokens is not None:
             self.kwargs[max_tokens_param] = max_tokens
         self.timeout = timeout
@@ -108,9 +129,11 @@ class APIClient:
         self.sleep_after_request = sleep_after_request
         self.read_cost = read_cost
         self.write_cost = write_cost
+        self.background = background
         self.batch_processing = batch_processing
         self.use_openai_responses_api = use_openai_responses_api
-        self.max_tool_calls = max_tool_calls
+        self.include_max_tool_calls = include_max_tool_calls
+        self.background = background
         if max_tokens is not None:
             self.max_tokens_param = max_tokens_param
         if reasoning_effort is not None:
@@ -127,13 +150,14 @@ class APIClient:
             tool_desc["function"]["name"]: func for func, tool_desc in self.tools if "function" in tool_desc
         }
         self.tool_descriptions = [tool_desc for _, tool_desc in self.tools]
-        if (self.max_tool_calls == 0 or len(self.tool_descriptions) == 0) and "tool_choice" in self.kwargs:
+        if (not self.tool_calls_allowed or len(self.tool_descriptions) == 0) and "tool_choice" in self.kwargs:
             del self.kwargs["tool_choice"]
 
         # Prep api
         self.api = api
         self.api_key = None
         self.base_url = None
+        self.terminated = False
         self._initialize_api_keys()
 
         # VLLM-specific initialization
@@ -152,6 +176,10 @@ class APIClient:
             )
             logger.info(f"Loaded local vllm model `{self.model}` with sampling {kwargs}")
 
+    def terminate(self):
+        """Terminates the APIClient."""
+        self.terminated = True
+
     def _kwarg_remover(self, api, model, kwargs):
         """Removes kwargs that are not supported by the API or model.
 
@@ -160,6 +188,8 @@ class APIClient:
             model (str): The model to use.
             kwargs (dict): The kwargs to clean.
         """
+        if "use_openai_responses_api_tools" in kwargs:
+            del kwargs["use_openai_responses_api_tools"]
         if any([kw in model for kw in ["o1", "o3", "o4"]]) and "temperature" in kwargs:
             del kwargs["temperature"]
         for kwarg in ["top_p", "top_k", "temperature"]:
@@ -173,7 +203,11 @@ class APIClient:
 
     def _initialize_api_keys(self):
         """Initializes the API keys and base URLs for the selected API."""
-        if self.api == "xai":
+        if self.api == "sri":
+            self.api_key = os.getenv("SRI_API_KEY")
+            self.base_url = "https://srlx.inf.ethz.ch/openai"
+            self.api = "openai"
+        elif self.api == "xai":
             self.api_key = os.getenv("XAI_API_KEY")
             self.base_url = "https://api.x.ai/v1"
             self.api = "openai"
@@ -184,10 +218,22 @@ class APIClient:
             self.base_url = "https://api.together.xyz/v1"
         elif self.api == "google":
             self.api_key = os.getenv("GOOGLE_API_KEY")
-            self.api = "openai"  # !
-            self.base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+            """
+                NOTE: We generally use google through openai compat
+                with external tools. BCN should be tested with internal
+                ones and this doesn't seem to be possible via compat,
+                so we route to google via requests.
+            """
+            if self.tool_calls_allowed and "gdm-eval-model-bcn" in self.model:
+                self.api = "google"
+                self.base_url = (
+                    "https://generativelanguage.googleapis.com/v1beta/models/gdm-eval-model-bcn:generateContent"
+                )
+            else:
+                self.api = "openai"  # !
+                self.base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
         elif self.api == "anthropic":
-            if self.max_tool_calls > 0:
+            if self.tool_calls_allowed:
                 self.api = "openai"
                 self.base_url = "https://api.anthropic.com/v1/"
                 if "thinking" in self.kwargs:
@@ -198,9 +244,21 @@ class APIClient:
             self.api_key = os.getenv("GLM_API_KEY")
             self.base_url = "https://api.z.ai/api/paas/v4/"
             self.api = "openai"
+        elif self.api == "tiiuae":
+            self.api_key = os.getenv("TIIUAE_API_KEY")
+            self.base_url = "https://falcon-stage.blueoc.tech/v1"
+            self.api = "openai"
+        elif self.api == "moonshot":
+            self.api_key = os.getenv("MOONSHOT_API_KEY")
+            self.base_url = "https://api.moonshot.ai/v1"
+            self.api = "openai"
         elif self.api == "deepseek":
             self.api_key = os.getenv("DEEPSEEK_API_KEY")
             self.base_url = "https://api.deepseek.com"
+            self.api = "openai"
+        elif self.api == "deepseek_special":
+            self.api_key = os.getenv("DEEPSEEK_API_KEY")
+            self.base_url = "https://api.deepseek.com/v3.2_speciale_expires_on_20251215"
             self.api = "openai"
         elif self.api == "openrouter":
             self.api_key = os.getenv("OPENROUTER_API_KEY")
@@ -218,10 +276,12 @@ class APIClient:
     class InternalRequestResult:
         """A class to hold the result of a request internally (below run_queries)."""
 
-        def __init__(self, conversation, input_tokens, output_tokens):
+        def __init__(self, conversation, input_tokens, output_tokens, n_retries=0, time=0):
             self.conversation = conversation
             self.input_tokens = input_tokens
             self.output_tokens = output_tokens
+            self.n_retries = n_retries
+            self.time = time
 
     def run_queries(self, queries, no_tqdm=False, ignore_tool_calls=False, custom_indices=None):
         """Only entry point: runs a given list of queries through the API.
@@ -253,7 +313,7 @@ class APIClient:
         # Case 1: VLLM
         if self.api == "vllm":
             # Bypass threading and batch everything into one local generate
-            # TODO check after refactor, esp indices and request logger
+            # TODO indices and request logger
             yield from self._run_vllm_queries(queries)
             return
 
@@ -274,6 +334,7 @@ class APIClient:
                     "input_tokens": result.input_tokens,
                     "output_tokens": result.output_tokens,
                     "time": end_time - start_time,
+                    "retries": result.n_retries,
                 }
                 yield idx, result.conversation, detailed_cost
             return
@@ -300,7 +361,9 @@ class APIClient:
                     "cost": self._get_cost(result.input_tokens, result.output_tokens),
                     "input_tokens": result.input_tokens,
                     "output_tokens": result.output_tokens,
+                    "n_retries": result.n_retries,
                     "time": time.time() - start_time,
+                    "request_time": result.time,
                 }
                 yield idx, result.conversation, detailed_cost
 
@@ -328,7 +391,14 @@ class APIClient:
             if (
                 m.get("role", "") == "user"
                 and isinstance(m.get("content", ""), list)
-                and ("gemini-" in self.model or "grok-4" in self.model or "qwen" in self.model or "glm" in self.model)
+                and (
+                    "gemini-" in self.model
+                    or "riftrunner" in self.model
+                    or "gdm-eval" in self.model
+                    or "grok-4" in self.model
+                    or "qwen" in self.model
+                    or "glm" in self.model
+                )
             ):
                 new_content = []
                 for block in m["content"]:
@@ -406,6 +476,16 @@ class APIClient:
                 continue
             new_messages.append(m)
 
+            # Remove thought signatures for riftrunner and bcn
+            if m.get("thought_signature", None) is not None:
+                new_messages[-1].pop("thought_signature")
+
+            # Remove thought signatures for riftrunner and bcn
+            if m.get("extra_content", None) is not None:
+                if m["extra_content"].get("google", None) is not None:
+                    if m["extra_content"]["google"].get("thought_signature", None) is not None:
+                        new_messages[-1]["extra_content"]["google"].pop("thought_signature")
+
         return new_messages
 
     """
@@ -433,10 +513,15 @@ class APIClient:
         for batch in self.vllm_model.generate(tasks, sampling_params=self.sampling_params):
             for out in batch.outputs:
                 last_outputs.append(out)
+            if self.terminated:
+                last_outputs += [None for _ in range(len(tasks) - len(last_outputs))]
         time_end = time.time()
 
         for idx, out in enumerate(last_outputs):
-            text = out.text
+            if out is None:
+                text = ""
+            else:
+                text = out.text
             conversation = [m.copy() for m in queries[idx]] + [{"role": "assistant", "content": text}]
             inp = getattr(out, "n_input_tokens", 0)
             outp = getattr(out, "n_output_tokens", 0)
@@ -444,6 +529,7 @@ class APIClient:
                 "cost": self._get_cost(inp, outp),
                 "input_tokens": inp,
                 "output_tokens": outp,
+                "retries": 0,
                 "time": time_end - time_start if idx == 0 else 0,  # put all in first since batch
             }
             yield idx, conversation, detailed_cost
@@ -544,7 +630,7 @@ class APIClient:
                     conversation = [m.copy() for m in queries[index]] + [{"role": "assistant", "content": content}]
                     input_tokens = result["response"]["body"]["usage"]["prompt_tokens"]
                     output_tokens = result["response"]["body"]["usage"]["completion_tokens"]
-                    results[index] = self.InternalRequestResult(conversation, input_tokens, output_tokens)
+                    results[index] = self.InternalRequestResult(conversation, input_tokens, output_tokens, n_retries=retry_idx)
                 except Exception as e:
                     logger.error(f"Error when unpacking batch OpenAI response, will repeat. Exception: {e}")
                     repeat_indices.append(index)
@@ -581,7 +667,7 @@ class APIClient:
 
         requests = []
         ts = time.strftime("%m%d-%H:%M:%S", time.localtime(time.time()))
-
+        ts += f".{datetime.now().microsecond:06d}"
         for idx, query in zip(indices, queries):
             kwargs_here = self.kwargs.copy()
             if query[0]["role"] == "system":
@@ -648,7 +734,7 @@ class APIClient:
                 conversation = [m.copy() for m in queries[i]] + new_messages
                 input_tokens = raw_result.result.message.usage.input_tokens
                 output_tokens = raw_result.result.message.usage.output_tokens
-                results.append(self.InternalRequestResult(conversation, input_tokens, output_tokens))
+                results.append(self.InternalRequestResult(conversation, input_tokens, output_tokens, n_retries=retry_idx))
             else:
                 results.append(None)
                 repeat_indices.append(i)
@@ -680,12 +766,22 @@ class APIClient:
             InternalRequestResult or None
         """
         retry_idx = 0
+        total_retries = 0
+        start_time = time.time()
         while retry_idx < self.max_retries:
+            if self.terminated:
+                return None
             try:
                 result = self._run_query(idx, query, ignore_tool_calls=ignore_tool_calls)
+                result.n_retries += total_retries
+                result.time = time.time() - start_time
                 time.sleep(self.sleep_after_request)
                 return result
             except Exception as e:
+                if "Max inner retries reached." in str(e):
+                    total_retries += self.max_retries_inner
+                elif "rate limit" not in str(e).lower() and "429" not in str(e):
+                    total_retries += 1
                 logger.error(f"Error in outer retries. Exception: {e}")
                 logger.error(f"Traceback: {traceback.format_exc()}")
                 time.sleep(self.sleep_on_error)
@@ -713,6 +809,11 @@ class APIClient:
         Returns:
             InternalRequestResult or None
         """
+        if self.api == "google":
+            assert "bcn" in self.model
+            # TODO make this code nice; for now quick patch:
+            # the only model that does not go to openai compatibility api is bcn
+            return self._google_query_with_internal_tools(idx, query)
         if self.api == "openai":
             return self._openai_query_with_tools(idx, query, ignore_tool_calls=ignore_tool_calls)
         elif self.api == "together":
@@ -720,10 +821,7 @@ class APIClient:
         elif self.api == "anthropic":
             return self._anthropic_query(idx, query)
         elif self.api == "openrouter":
-            if self.max_tool_calls > 0:
-                return self._openai_query_with_tools(idx, query)
-            else:
-                return self._openrouter_query(idx, query)
+            return self._openai_query_with_tools(idx, query)
 
     def _anthropic_query(self, idx, query):
         """Queries the Anthropic API.
@@ -753,45 +851,6 @@ class APIClient:
         input_tokens = raw_result.usage.input_tokens
         output_tokens = raw_result.usage.output_tokens
         return self.InternalRequestResult(conversation, input_tokens, output_tokens)
-
-    def _openrouter_query(self, idx, query):
-        """Queries the OpenRouter API.
-
-        Args:
-            idx (int): The index of the query in the batch of queries given to run_queries.
-            query (MessageList): The query to run.
-
-        Returns:
-            InternalRequestResult or None
-        """
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        query_key = "messages"
-
-        response = requests.post(
-            "https://openrouter.ai/api/v1/chat/completions",
-            headers=headers,
-            json={"model": self.model, query_key: self._drop_cot(query), "timeout": self.timeout, **self.kwargs},
-        )
-        if response.status_code != 200:
-            raise Exception(f"Error: {response.status_code} - {response.text}")
-        json_response = response.json()
-
-        if "choices" not in json_response:
-            raise Exception(f"Error: {json_response}")
-
-        output = json_response["choices"][0]["message"]["content"]
-        for rk in ["reasoning_content", "reasoning"]:
-            if rk in json_response["choices"][0]["message"] and json_response["choices"][0]["message"][rk] is not None:
-                output = json_response["choices"][0]["message"][rk] + "</think>" + output
-                break
-        return self.InternalRequestResult(
-            conversation=[m.copy() for m in query] + [{"role": "assistant", "content": output}],
-            input_tokens=json_response["usage"]["prompt_tokens"],
-            output_tokens=json_response["usage"]["completion_tokens"],
-        )
 
     def _openai_query_with_tools(self, idx, query, is_together=False, ignore_tool_calls=False):
         """Queries the OpenAI API with tools.
@@ -836,22 +895,27 @@ class APIClient:
             else:
                 response_tools.append({"type": "function", **tool_desc["function"]})
         if ignore_tool_calls:
-            max_tool_calls = 0
+            max_tool_calls_mode, max_tool_calls = "total", {"any": 0}
         elif len(response_tools) == 1 and response_tools[0]["type"] == "code_interpreter":
-            max_tool_calls = 0  # was 1 before for some reason here
+            max_tool_calls_mode, max_tool_calls = "total", {"any": 0}
         else:
-            max_tool_calls = self.max_tool_calls
+            max_tool_calls_mode, max_tool_calls = self.max_tool_calls_mode, self.max_tool_calls
 
         # State
-        nb_executed_tool_calls = 0
+        total_max_tool_calls = sum(max_tool_calls.values())
+        if max_tool_calls_mode == "total":
+            nb_executed_tool_calls = {"any": 0}
+        else:
+            nb_executed_tool_calls = {t: 0 for t in self.tool_functions.keys()}
         conversation = [m.copy() for m in messages]
         input_tokens = 0
         output_tokens = 0
+        total_retries = 0
 
-        for _ in range(max_tool_calls + 1):
+        for _ in range(total_max_tool_calls + 1):
             # Inner retry to get a response
             response = None
-            n_retries = 0
+            n_retries = -1
             while response is None and n_retries < self.max_retries_inner:
                 n_retries += 1
                 try:
@@ -860,14 +924,24 @@ class APIClient:
                         "tools": response_tools,
                         "input": self._drop_cot(conversation),  # Drop CoT here to save cost (stays in convo)
                         "timeout": self.timeout,
+                        "background": self.background,
                         **self.kwargs,
                     }
+                    if self.background:
+                        payload["background"] = self.background
                     ts = time.strftime("%m%d-%H:%M:%S", time.localtime(time.time()))
+                    ts += f".{datetime.now().microsecond:06d}"
                     info = {"nb_executed_tool_calls": nb_executed_tool_calls, "n_retries": n_retries}
                     request_logger.log_request(ts=ts, batch_idx=idx, request=payload, **info)
                     response = client.responses.create(**payload)
+                    if self.background:
+                        while response.status in {"queued", "in_progress"}:
+                            time.sleep(15)
+                            response = client.responses.retrieve(response.id)
                     request_logger.log_response(ts=ts, batch_idx=idx, response=response.model_dump())
                 except Exception as e:
+                    if "rate limit" not in str(e).lower() and "429" not in str(e):
+                        total_retries += 1
                     request_logger.log_response(ts=ts, batch_idx=idx, response={"exception": str(e)})
                     time.sleep(20)
                     logger.error(f"Got OpenAI error in responses api inner. Exception: {e}")
@@ -882,9 +956,11 @@ class APIClient:
             was_tool_call_executed = False
             for out in response.output:
                 if out.type == "message":
+                    all_messages = ""  # need all together + ID because API crashes otherwise
                     for c in out.content:
                         if c.type == "output_text":
-                            conversation.append({"role": "assistant", "content": c.text})
+                            all_messages += f"{c.text}\n\n"
+                    conversation.append({"role": "assistant", "content": all_messages, "id": out.id})
                 elif out.type == "code_interpreter_call":
                     conversation.append(
                         {
@@ -898,13 +974,14 @@ class APIClient:
                     function_name = out.name
                     arguments = json.loads(out.arguments)
                     tool_func = self.tool_functions[function_name]
-                    if nb_executed_tool_calls >= self.max_tool_calls:
-                        output = f"Error: Made a tool call after exceeding max # of tool calls ({self.max_tool_calls})."
+                    tool_key = "any" if max_tool_calls_mode == "total" else function_name
+                    if nb_executed_tool_calls[tool_key] >= max_tool_calls[tool_key]:
+                        output = f"Error: Tool call after exceeding max # of tool calls ({max_tool_calls[tool_key]})."
                     else:
                         try:
                             output = tool_func(**arguments)  # EXECUTE
                         except Exception as e:
-                            output = f"Responses api, error executing tool {function_name}. Exception: {e}"
+                            output = f"Error executing tool {function_name}. Exception: {e}"
                     if not isinstance(output, str):
                         additional_cost = output[1]
                         input_tokens += additional_cost["input_tokens"]
@@ -914,33 +991,53 @@ class APIClient:
                         {
                             "type": "function_call",
                             "call_id": out.call_id,
-                            "arguments": arguments,
+                            "arguments": out.arguments,
                             "name": out.name,
                         }
                     )
                     was_tool_call_executed = True
-                    nb_executed_tool_calls += 1
-                    nb_tool_calls_left = self.max_tool_calls - nb_executed_tool_calls
-                    info = f"\n\n### INFO ###\nYou have {nb_tool_calls_left} tool executions left."
+                    nb_executed_tool_calls[tool_key] += 1
+                    nb_tool_calls_left = max_tool_calls[tool_key] - nb_executed_tool_calls[tool_key]
+                    detail = "for this tool" if max_tool_calls_mode == "per_tool" else "(across all tools)"
+                    if self.include_max_tool_calls:
+                        info = f"\n\n### INFO ###\nYou have {nb_tool_calls_left} tool executions left {detail}."
+                    else:
+                        info = ""
                     conversation.append(
                         {"type": "function_call_output", "call_id": out.call_id, "output": output + info}
                     )
                 elif out.type == "reasoning":
-                    summary = ""
-                    for thought in out.summary:
-                        if thought.text is not None:
-                            summary += "<thought>" + "\n" + thought.text + "\n" + "</thought>\n"
-                    conversation.append({"role": "assistant", "type": "cot", "content": summary, "id": out.id})
+                    """
+                    API change - each code_interpreter_call now comes with this block beforehand and if you don't
+                    keep it it crashes. So we keep it intact (so it does not get stripped in _drop_cot
+                    and clean_conversation later will do what the code below used to do).
+                    Still need to convert to dict.
+                    """
+                    reasoning_block = {
+                        "id": out.id,
+                        "summary": [{"text": b.text, "type": b.type} for b in out.summary],
+                        "type": out.type,
+                        "content": out.content,
+                        "encrypted_content": out.encrypted_content,
+                        # "status": out.status,
+                    }
+                    # NOTE: you get status from OpenAI but if you send it back to them they crash out
+                    conversation.append(reasoning_block)
+                    # summary = ""
+                    # for thought in out.summary:
+                    #    if thought.text is not None:
+                    #        summary += "<thought>" + "\n" + thought.text + "\n" + "</thought>\n"
+                    # conversation.append({"role": "assistant", "type": "cot", "content": summary, "id": out.id})
                 else:
                     raise ValueError(f"Unknown output type {out.type}")
 
             # If nothing was run this was the last iteration, stop
-            if not was_tool_call_executed:
+            if not was_tool_call_executed or self.terminated:
                 break
 
         if len(conversation) == len(messages):
             conversation.append({"role": "assistant", "content": ""})
-        return self.InternalRequestResult(conversation, input_tokens, output_tokens)
+        return self.InternalRequestResult(conversation, input_tokens, output_tokens, n_retries=total_retries)
 
     def _openai_query_chat_completions_api(self, client, idx, messages, ignore_tool_calls=False):
         """Queries the OpenAI API using chat completions API.
@@ -957,19 +1054,25 @@ class APIClient:
 
         # Set up tools
         if ignore_tool_calls:
-            max_tool_calls = 0
+            max_tool_calls_mode, max_tool_calls = "total", {"any": 0}
         else:
-            max_tool_calls = self.max_tool_calls
+            max_tool_calls_mode, max_tool_calls = self.max_tool_calls_mode, self.max_tool_calls
 
         # State
-        nb_executed_tool_calls = 0
+        total_max_tool_calls = sum(max_tool_calls.values())
+        if max_tool_calls_mode == "total":
+            nb_executed_tool_calls = {"any": 0}
+        else:
+            nb_executed_tool_calls = {t: 0 for t in self.tool_functions.keys()}
         conversation = [m.copy() for m in messages]
         input_tokens = 0
         output_tokens = 0
+        total_retries = 0
+        max_output_tokens = self.kwargs.get(self.max_tokens_param, None)
 
         # As long as we just had a tool response do another request
         was_tool_call_executed = True
-        while was_tool_call_executed:
+        while was_tool_call_executed and not self.terminated:
             was_tool_call_executed = False
             # Inner retry to get a response
             response = None
@@ -977,25 +1080,35 @@ class APIClient:
             while response is None and n_retries < self.max_retries_inner:
                 n_retries += 1
                 try:
+                    kwargs = self.kwargs.copy()
+                    kwargs[self.max_tokens_param] = max_output_tokens
                     payload = {
                         "model": self.model,
                         "messages": self._drop_cot(conversation),  # Drop CoT here to save cost (stays in convo)
-                        "tools": self.tool_descriptions,
+                        "tools": self.tool_descriptions if len(self.tool_descriptions) > 0 else None,
                         "timeout": self.timeout,
-                        **self.kwargs,
+                        **kwargs,
                     }
                     ts = time.strftime("%m%d-%H:%M:%S", time.localtime(time.time()))
+                    ts += f".{datetime.now().microsecond:06d}"
                     info = {"nb_executed_tool_calls": nb_executed_tool_calls, "n_retries": n_retries}
                     request_logger.log_request(ts=ts, batch_idx=idx, request=payload, **info)
                     response = client.chat.completions.create(**payload)
                     request_logger.log_response(ts=ts, batch_idx=idx, response=response.model_dump())
                 except Exception as e:
+                    if "rate limit" not in str(e).lower() and "429" not in str(e):
+                        total_retries += 1
                     request_logger.log_response(ts=ts, batch_idx=idx, response={"exception": str(e)})
                     if isinstance(e, RateLimitError):
                         logger.info(f"Got OpenAI CC rate limit error. Sleeping for 60 seconds. Exception: {e}")
                         time.sleep(60)
                         continue
                     else:
+                        if "maximum context length" in str(e).lower() or "input token count" in str(e).lower():
+                            max_output_tokens = max_output_tokens // 2
+                            logger.info(
+                                f"Got OpenAI CC max context length error. Reducing max output tokens to {max_output_tokens} and retrying. Exception: {e}"
+                            )
                         logger.info(f"Got OpenAI CC non ratelimit error. Sleeping for 20 seconds: {e}")
                         time.sleep(20)
                         continue
@@ -1006,61 +1119,201 @@ class APIClient:
             input_tokens += response.usage.prompt_tokens
             output_tokens += response.usage.total_tokens - response.usage.prompt_tokens
             message = response.choices[0].message
-
+            if self.context_limit is not None:
+                max_output_tokens = self.context_limit
+                if max_output_tokens is not None:
+                    max_output_tokens -= response.usage.total_tokens
+                    max_output_tokens = min(max_output_tokens, 
+                                            self.kwargs.get(self.max_tokens_param, float("inf")))
+            else:
+                max_output_tokens = self.kwargs.get(self.max_tokens_param, None)
             # Add CoT and rest of message separately
-            # TODO: if we notice new ways to return CoT they should be mangled here
-            if hasattr(message, "reasoning") and message.reasoning:
-                conversation.append({"role": "assistant", "type": "cot", "content": message.reasoning})
-            if hasattr(message, "reasoning_content") and message.reasoning_content:
-                conversation.append({"role": "assistant", "type": "cot", "content": message.reasoning_content})
+            # TODO: if we notice new ways to return CoT they should be mangled here. Likely missing something.
+            if hasattr(message, "reasoning_details") and message.reasoning_details:
+                for detail in message.reasoning_details:
+                    if isinstance(detail, dict):
+                        type_ = detail.get("type", "")
+                        text_ = detail.get("text", "")
+                        sumary_ = detail.get("sumary", "")
+                    else:
+                        type_ = detail.type
+                        text_ = detail.text
+                        sumary_ = detail.sumary
+                    if type_ == "reasoning.text":
+                        conversation.append({"role": "assistant", "type": "cot", "content": text_})
+                    elif type_ == "reasoning.summary":
+                        conversation.append({"role": "assistant", "type": "cot", "content": sumary_})
+                    else:
+                        pass  # encrypted
+            else:
+                # Reasoning details trumps others as there is repetition
+                if hasattr(message, "reasoning") and message.reasoning:
+                    conversation.append({"role": "assistant", "type": "cot", "content": message.reasoning})
+                if hasattr(message, "reasoning_content") and message.reasoning_content:
+                    conversation.append({"role": "assistant", "type": "cot", "content": message.reasoning_content})
+
             message_dict = message.model_dump()
             message_dict = {k: v for k, v in message_dict.items() if v is not None}  # Drop nulls
             if "reasoning" in message_dict:
                 del message_dict["reasoning"]
-            if "reasoning_content" in message_dict:
+            if "reasoning_content" in message_dict and "deepseek" not in self.model.lower():
                 del message_dict["reasoning_content"]
-            conversation.append(message_dict)  # Should have tool calls inside too!
+            if "reasoning_details" in message_dict:
+                pass  # Models that have this like to also have it back so it's kept, as "type":"cot" blocks get filtered out before the API. Normalize_conversation does the opposite: ignores this but keeps clean "cot" blocks.
+            conversation.append(message_dict)  # Should have tool calls inside too; and reasoning_details
 
             # Try to execute all tool calls
             if message.tool_calls:
                 for tool_call in message.tool_calls:
-                    function_name = tool_call.function.name
+                    if isinstance(tool_call, dict):
+                        function_name = tool_call.get("function", dict()).get("name", "")
+                    else:
+                        function_name = tool_call.function.name
                     if function_name not in self.tool_functions:
                         logger.warning(f"Tool {function_name} not found, skipping.")
                         continue
+                    tool_func = self.tool_functions[function_name]
 
                     # If no budget return error
                     # NOTE: just erroring out here might stop the request loop but the model will be given last chance.
-                    if nb_executed_tool_calls >= max_tool_calls:
-                        error = f"Error: Exceeded maximum number of tool calls ({max_tool_calls})."
+                    tool_key = "any" if max_tool_calls_mode == "total" else function_name
+                    if nb_executed_tool_calls[tool_key] >= max_tool_calls[tool_key]:
+                        error = f"Error: Exceeded maximum number of tool calls ({max_tool_calls[tool_key]})."
                         conversation.append({"role": "tool", "tool_call_id": tool_call.id, "content": error})
-                        continue
+                    else:
+                        # Execute tool
+                        arguments = json.loads(tool_call.function.arguments)
+                        try:
+                            output = tool_func(**arguments)
+                        except Exception as e:
+                            output = f"Error executing tool {function_name}. Exception: {e}"
+                        # Tools can return additional cost
+                        if isinstance(output, tuple):
+                            output, extra_cost = output
+                            input_tokens += extra_cost["input_tokens"]
+                            output_tokens += extra_cost["output_tokens"]
 
-                    # Execute tool
-                    arguments = json.loads(tool_call.function.arguments)
-                    tool_func = self.tool_functions[function_name]
-                    output = tool_func(**arguments)
+                        nb_executed_tool_calls[tool_key] += 1
 
-                    # Tools can return additional cost
-                    if isinstance(output, tuple):
-                        output, extra_cost = output
-                        input_tokens += extra_cost["input_tokens"]
-                        output_tokens += extra_cost["output_tokens"]
+                        nb_tool_calls_left = max_tool_calls[tool_key] - nb_executed_tool_calls[tool_key]
+                        detail = "for this tool" if max_tool_calls_mode == "per_tool" else "(across all tools)"
+                        info = f"\n\n### INFO ###\nYou have {nb_tool_calls_left} tool executions left {detail}."
+                        conversation.append(
+                            {
+                                "role": "tool",
+                                "tool_name": function_name,
+                                "tool_call_id": tool_call.id,
+                                "content": output + info,
+                            }
+                        )
 
-                    # Successful execution, inform the model of remaining budget
                     was_tool_call_executed = True
-                    nb_executed_tool_calls += 1
-                    nb_tool_calls_left = self.max_tool_calls - nb_executed_tool_calls
-                    info = f"\n\n### INFO ###\nYou have {nb_tool_calls_left} tool executions left."
-                    conversation.append(
-                        {
-                            "role": "tool",
-                            "tool_name": function_name,
-                            "tool_call_id": tool_call.id,
-                            "content": output + info,
-                        }
-                    )
-        if self.max_tool_calls > 0:
+
+        if total_max_tool_calls > 0:
             logger.info(f"Finished on a loop without tool calls, after executing {nb_executed_tool_calls} calls total.")
 
-        return self.InternalRequestResult(conversation, input_tokens, output_tokens)
+        return self.InternalRequestResult(conversation, input_tokens, output_tokens, n_retries=total_retries)
+
+    def _google_query_with_internal_tools(self, idx, messages):
+        """Queries Google for BCN.
+        InternalRequestResult or None
+        """
+        # NOTE: expect single turn (since internal tool calls) and don't reprompt
+        # TODO implement properly or find a way to use openai compat
+        assert len(messages) == 1 and messages[0]["role"] == "user"
+
+        conversation = [m.copy() for m in messages]
+
+        headers = {
+            "x-goog-api-key": f"{self.api_key}",
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "contents": [{"role": "user", "parts": {"text": messages[0]["content"]}}],
+            "tools": self.tool_descriptions,
+        }
+
+        ts = time.strftime("%m%d-%H:%M:%S", time.localtime(time.time()))
+        ts += f".{datetime.now().microsecond:06d}"
+        request_logger.log_request(ts=ts, batch_idx=idx, request=payload)
+
+        response = requests.post(
+            self.base_url,
+            headers=headers,
+            json=payload,
+        )
+        request_logger.log_response(ts=ts, batch_idx=idx, response=response.json())
+
+        if response.status_code != 200:
+            raise Exception(f"Error: {response.status_code} - {response.text}")
+        json_response = response.json()
+
+        if "candidates" not in json_response:
+            raise Exception(f"Error: {json_response}")
+
+        message = json_response["candidates"][0]["content"]
+        parts = message["parts"]
+        role = message["role"]
+        assert role == "model"
+
+        input_tokens = json_response["usageMetadata"]["promptTokenCount"]
+        output_tokens = json_response["usageMetadata"]["candidatesTokenCount"]
+
+        def _clear_buffer(conversation, buffer, mode):
+            if buffer is None or len(buffer) == 0:
+                return
+            if mode == "cot":
+                conversation.append({"role": "assistant", "type": "cot", "content": buffer})
+            elif mode == "response":
+                conversation.append({"role": "assistant", "type": "response", "content": buffer})
+            else:
+                return
+
+        mode = None
+        buffer = ""
+        # TODO: We will log these as external tool call now for speed, transpile later
+        for part in parts:
+            if "thought" in part and part["thought"]:
+                if mode != "cot":
+                    _clear_buffer(conversation, buffer, mode)
+                    buffer = ""
+                    mode = "cot"
+                buffer += f"{part['text']}"
+            elif "functionCall" in part:
+                _clear_buffer(conversation, buffer, mode)
+                buffer = ""
+                mode = None
+                conversation.append(
+                    {
+                        "type": "tool_call",
+                        "role": "assistant",
+                        "call_id": "1",
+                        "arguments": part["functionCall"]["args"],
+                        "name": part["functionCall"]["name"],
+                    }
+                )
+            elif "functionResponse" in part:
+                _clear_buffer(conversation, buffer, mode)
+                buffer = ""
+                mode = None
+                name = part["functionResponse"]["name"]
+                resp = part["functionResponse"]["response"]
+                if "result" in resp:
+                    result = resp["result"]
+                elif "content" in resp:
+                    result = resp["content"]
+                else:
+                    result = ""
+                conversation.append({"role": "tool", "tool_name": f"{name}", "tool_call_id": "1", "content": result})
+            elif "text" in part:
+                if mode != "response":
+                    _clear_buffer(conversation, buffer, mode)
+                    buffer = ""
+                    mode = "response"
+                buffer += f"{part['text']}"
+        _clear_buffer(conversation, buffer, mode)
+
+        return self.InternalRequestResult(
+            conversation=conversation, input_tokens=input_tokens, output_tokens=output_tokens
+        )

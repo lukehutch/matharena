@@ -1,8 +1,31 @@
 This readme explains how to run Project Euler problems with MathArena.
 
+## Adding a new problem
+
+When there is a new problem, you can add its problem statement automatically by running a command like this (replace id with the actual id of the new problem):
+
+```bash
+uv run python scripts/euler/add_euler.py --problem_id 954
+```
+
+This will:
+- Add the problem statement to the `data/euler/euler/problems` directory.
+- Update the number of problems in the config file `configs/competitions/euler/euler.yaml` and set the date as today, which you should edit or confirm.
+- Update the `source.csv` file which maps the ids shown in the table to the actual problem id in the format `eulerXXX` (e.g. `euler955` for problem `955`). 
+- Set the answer to "none" in the `answers.csv` file.
+- Update `website/flaskr/static/data/competitions.json` with info such as difficulty (set as todo, update when known).
+
+Note: These problem statements have HTML in them such as `<p>...</p>`. You can manually remove these from the problem statements.
+
 ## Running the models
 
 For most of the models, code execution is done remotely using Modal. You can create an account there and follow the quickstart setup (https://modal.com/docs/guide).
+We have a backup option that uses Docker locally. To enables this, first run:
+
+```bash
+docker build -t matharena-docker docker/
+```
+
 After the setup, you can test whether everything works by running the script with a few basic test cases:
 
 ```bash

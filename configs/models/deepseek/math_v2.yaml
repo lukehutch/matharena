@@ -1,0 +1,14 @@
+model: deepseek-ai/DeepSeek-Math-V2
+api: vllm
+max_tokens: 128000
+temperature: 0.6
+top_p: 0.95
+read_cost: 0.28
+write_cost: 0.42
+human_readable_id: DeepSeek-Math-V2
+date: "2025-11-28"
+other_params:
+  open: true
+  creator: DeepSeek
+  parameters: 671
+  active_parameters: 37

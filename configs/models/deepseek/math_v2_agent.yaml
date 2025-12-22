@@ -1,0 +1,4 @@
+type: agent
+model_config: models/deepseek/math_v2
+scaffold_config: agent_scaffolds/deepseek_math
+human_readable_id: DeepSeek-Math-V2 Agent

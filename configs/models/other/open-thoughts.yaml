@@ -6,3 +6,8 @@ concurrent_requests: 10
 read_cost: 0
 write_cost: 0
 human_readable_id: OpenThinker-32B
+other_params:
+  open: true
+  creator: Open Thoughts
+  parameters: 32
+  active_parameters: 32

@@ -12,3 +12,8 @@ write_cost: 0.88
 human_readable_id: Llama-4-Maverick
 date: "2025-04-05"
 concurrent_requests: 8
+other_params:
+  open: true
+  creator: Meta
+  parameters: 128
+  active_parameters: 17

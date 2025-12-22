@@ -1,0 +1,4 @@
+type: agent
+model_config: models/glm/glm-45
+scaffold_config: agent_scaffolds/self_calling
+human_readable_id: GLM 4.5 Self-Calling

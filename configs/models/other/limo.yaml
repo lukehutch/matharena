@@ -7,3 +7,8 @@ read_cost: 0
 write_cost: 0
 human_readable_id: LIMO
 date: "2025-02-05"
+other_params:
+  open: true
+  creator: GAIR
+  parameters: 32
+  active_parameters: 32

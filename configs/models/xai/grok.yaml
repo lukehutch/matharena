@@ -5,3 +5,7 @@ read_cost: 0
 write_cost: 0
 human_readable_id: Grok 3 (Think)
 concurrent_requests: 1
+date: "2025-02-17"
+other_params:
+  open: false
+  creator: xAI

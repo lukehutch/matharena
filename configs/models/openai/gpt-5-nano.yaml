@@ -12,3 +12,6 @@ use_openai_responses_api: true
 date: "2025-08-07"
 reasoning:
   summary: "auto"
+other_params:
+  open: false
+  creator: OpenAI

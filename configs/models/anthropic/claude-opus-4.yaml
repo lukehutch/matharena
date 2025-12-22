@@ -12,3 +12,6 @@ write_cost: 75
 batch_processing: true
 human_readable_id: Claude-Opus-4.0 (Think)
 date: "2025-05-22"
+other_params:
+  open: false
+  creator: Anthropic

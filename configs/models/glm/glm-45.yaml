@@ -8,3 +8,8 @@ read_cost: 0.6
 write_cost: 2.2
 human_readable_id: GLM 4.5
 date: "2025-08-01"
+other_params:
+  open: true
+  creator: Z.ai
+  parameters: 355
+  active_parameters: 32

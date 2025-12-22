@@ -40,7 +40,7 @@ def load_configs(root_dir, remove_extension=True):
     output_configs = dict()
 
     for file_path in yaml_files:
-        with file_path.open("r") as f:
+        with file_path.open("r", encoding="utf-8") as f:
             config_data = yaml.safe_load(f)
         file_path_remove_config = str(file_path).replace("\\", "/").replace(str(root).replace("\\", "/") + "/", "")
         if remove_extension:
@@ -68,7 +68,7 @@ def exclude_configs(configs, human_readable_ids, exclude_file_path, comp):
     """
     if exclude_file_path is None:
         return configs, human_readable_ids
-    with open(exclude_file_path, "r") as f:
+    with open(exclude_file_path, "r", encoding="utf-8") as f:
         exclude_regexes = [line.strip() for line in f.readlines()]
     for config_path in list(configs.keys()):
         for regex in exclude_regexes:
@@ -121,7 +121,7 @@ def extract_existing_configs(
             exists = True
             if not is_final_answer:
                 for file in os.listdir(os.path.join(root_dir, comp, config_path)):
-                    with open(os.path.join(root_dir, comp, config_path, file), "r") as f:
+                    with open(os.path.join(root_dir, comp, config_path, file), "r", encoding="utf-8") as f:
                         data = json.load(f)
                     if "judgment" not in data and not allow_non_existing_judgment:
                         logger.warning(f"Judgment not found in {file}")

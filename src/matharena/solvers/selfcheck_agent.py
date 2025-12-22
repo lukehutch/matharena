@@ -1,7 +1,9 @@
 from typing import Any, override
-from matharena.solvers import SolverResponse, BaseAgent
+
 from loguru import logger
+
 from matharena.api_client import APIClient
+from matharena.solvers import BaseAgent, SolverResponse
 from matharena.utils import get_substring
 
 
@@ -11,8 +13,12 @@ class SelfcheckAgent(BaseAgent):
     self-correction and verification steps.
     """
 
-    def __init__(self, batch_idx, solver_config, default_prompt_template, default_api_client_args):
-        super().__init__(batch_idx, solver_config, default_prompt_template, default_api_client_args)
+    # TODO: Try with a thinking model to make sure CoT flows make sense.
+    # (api_client should always split CoT into a separate message, which will end up in history but is
+    #  never sent as a request to the model)
+
+    def __init__(self, batch_idx, problem_idx, run_idx, solver_config, default_prompt_template, default_api_client_args):
+        super().__init__(batch_idx, problem_idx, run_idx, solver_config, default_prompt_template, default_api_client_args)
         self.model_config = solver_config["model_config"]
         self.scaffold_config = solver_config["scaffold_config"]
 

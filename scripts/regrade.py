@@ -1,15 +1,14 @@
 import argparse
+import json
 import os
 
-import json
 import yaml
 from loguru import logger
 
 from matharena.grader import extract_and_grade
 from matharena.runner import Runner
 from matharena.runs import Runs
-from matharena.grader import extract_and_grade
-from matharena.utils import normalize_conversation, is_conversation_broken
+from matharena.utils import is_conversation_broken, normalize_conversation
 
 """
     Loads all .json runs files for a given competition across all models and recomputes some things.
@@ -44,8 +43,7 @@ missing_runs = []
 for comp in args.comps:
 
     logger.info(f"Initializing runner for competition {comp}")
-    runner = Runner(comp, args.n, args.comp_configs_dir, None, args.output_dir, False)
-
+    runner = Runner(comp, args.n, None, args.comp_configs_dir, None, args.output_dir, False)
     for api in os.listdir(f"{args.output_dir}/{comp}"):
         for solver in os.listdir(f"{args.output_dir}/{comp}/{api}"):
             if args.models is not None and f"{api}/{solver}" not in args.models:
@@ -109,8 +107,8 @@ for comp in args.comps:
                                 clean_conversation, output_tokens, gold_answer, comp_config, debug_info=debug_info
                             )
                             runs.update_run_grading(i, grader_response)
-                        else:
-                            logger.info("Skipping rerunning grading since not final answer competition")
+                    else:
+                        logger.info("Skipping rerunning grading since not final answer competition")
 
                 # Rerun cost
                 if not args.no_rerun_cost:

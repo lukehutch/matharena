@@ -81,9 +81,9 @@ if __name__ == "__main__":
                 problem_file = os.path.join(folder, "problems", f"{idx}.png")
                 # copy image to temp folder
                 
-                temp_problem_file = os.path.join("temp", f"problem_{idx}.png")
+                temp_problem_file = os.path.join("temp", f"{comp.replace("/", "--")}_problem_{idx}.png")
                 shutil.copy(problem_file, temp_problem_file)
-                data_dict["file_name"] = f"problem_{idx}.png"
+                data_dict["file_name"] = f"{comp.replace("/", "--")}_problem_{idx}.png"
             
             if len(args.comp) > 1:
                 data_dict["competition"] = comp
@@ -92,10 +92,6 @@ if __name__ == "__main__":
 
 
     df = pd.DataFrame(all_data)
-    # remove  samples from the "smt" competition
-    if "source" in df.columns:
-        df = df[df["source"].apply(lambda x: not isinstance(x, str) or "smt" not in x.lower())]
-
     if args.add:
         df["competition"] = args.comp
         try:

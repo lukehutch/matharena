@@ -1,0 +1,65 @@
+
+{% extends "base.html" %}
+
+{% block sidebar %}
+    <a href="{{ sidebar.expand_url }}" class="sidebar-main-button">{{ sidebar.toggle_text }}</a>
+    <a href="{{ url_for('model_view', model=sidebar.current_model) }}" class="sidebar-item strong">  {{ sidebar.current_model }}</a>
+    <div class="expanded">
+        {% for problem, data in sidebar.problems.items() %}
+            <a href="{{ url_for('problem_view', model=sidebar.current_model, problem_name=problem) }}" class="sidebar-item {{ data.class }}">{{ data.name }} {{ data.ticks }}</a>
+        {% endfor %}
+    </div>
+{% endblock %}
+
+{% block content %}
+    <h3 style="text-align: left;">Model: {{ model }}</h3>
+    <h3 style="text-align: left;">Problem: {{ problem_name }} {{ ticks }}</h3>
+
+    <div class="marked box problem-box">{% if problem_statement %}{{ problem_statement }}{% endif %}{% if img_path %}<img src="{{ img_path }}" class="problem-image">{% endif %}</div>
+    <div class="marked box solution-box">{{ solution }}</div>
+
+    {% for instance in instances %}
+        <div class="fake-hr"></div>
+        <details class="strong">
+            <summary>[Run {{ instance.run }}] Metadata:</summary>
+            <div class="box metadata-box">
+                {% if instance.metadata.cost %}
+                <p>Cost: ${{ instance.metadata.cost.cost }}</p>
+                <p>Input Tokens: {{ instance.metadata.cost.input_tokens }}</p>
+                <p>Output Tokens: {{ instance.metadata.cost.output_tokens }}</p>
+                    {% if instance.metadata.cost.time %}
+                        <p>Time taken: {{ instance.metadata.cost.time}}s</p>
+                    {% endif %}
+                {% endif %}
+                <p>Tool Calls:</p>
+                {% if instance.metadata.tool_calls %}
+                <ul>
+                {% for tool, count in instance.metadata.tool_calls.items() %}
+                    <li>{{ tool }}: {{ count }}</li>
+                {% endfor %}
+                </ul>
+                {% else %}
+                <p>No tool calls in this solution.</p>
+                {% endif %}
+            </div>
+        </details>
+        {% if instance.history and instance.history|length > 0 %}
+            <details class="response-box-details strong" id="{{ instance.conversation_id }}>>history">
+                <summary>[Run {{ instance.run }}] History:</summary>
+            </details>
+        {% endif %}
+        <details class="response-box-details strong" id="{{ instance.conversation_id }}">
+            <summary>[Run {{ instance.run }}] Conversation:</summary>
+        </details>
+        <p class="strong">[Run {{ instance.run }}] Parsed Answer ({{ instance.verdict }}, {{ instance.warnings }} warnings):</p>
+        <div class="box answer-box {{ instance.correct_cls }}">{{ instance.answer }}</div>
+    {% endfor %}
+
+    {% if boxes_expanded %}
+    <style>
+        .box {
+            max-height: none !important;
+        }
+    </style>
+    {% endif %}
+{% endblock %}
