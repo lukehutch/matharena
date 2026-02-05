@@ -6,7 +6,7 @@ write_cost: 14
 concurrent_requests: 32
 temperature: null
 top_p: null
-human_readable_id: GPT-5.2 (high)
+human_readable_id: GPT-5.2 (xhigh)
 batch_processing: false
 background: true
 use_openai_responses_api: true

@@ -24,9 +24,12 @@ class RequestLogger:
     def log_request(self, ts, batch_idx, request, **info):
         if self.comp_name is None:
             problem_idx = -1
-            logfile = f"{self.log_dir}/uninitialized_{ts}_idx{batch_idx}.json"
+            logfile = f"{self.log_dir}/uninitialized/{ts}_idx{batch_idx}.json"
         else:
-            problem_idx = self.batch_idx_to_problem_idx[batch_idx]
+            try:
+                problem_idx = self.batch_idx_to_problem_idx[batch_idx]
+            except:
+                problem_idx = 0
             logfile = f"{self.log_dir}/{self.comp_name}/{self.solver_name}/{ts}_p{problem_idx}_idx{batch_idx}.json"
         os.makedirs(os.path.dirname(logfile), exist_ok=True)
         if os.path.exists(logfile):
@@ -50,9 +53,12 @@ class RequestLogger:
 
     def log_response(self, ts, batch_idx, response, **info):
         if self.comp_name is None:
-            logfile = f"{self.log_dir}/uninitialized_{ts}_idx{batch_idx}.json"
+            logfile = f"{self.log_dir}/uninitialized/{ts}_idx{batch_idx}.json"
         else:
-            problem_idx = self.batch_idx_to_problem_idx[batch_idx]
+            try:
+                problem_idx = self.batch_idx_to_problem_idx[batch_idx]
+            except:
+                problem_idx = 0
             logfile = f"{self.log_dir}/{self.comp_name}/{self.solver_name}/{ts}_p{problem_idx}_idx{batch_idx}.json"
         if not os.path.exists(logfile):
             logger.warning(f"Can't log response, log file does not exist: {logfile}")

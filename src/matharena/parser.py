@@ -5,6 +5,7 @@ from enum import Enum
 from fractions import Fraction
 from functools import total_ordering
 from typing import Any, Optional
+from sympy import simplify, Symbol, Mul
 
 import regex
 import sympy
@@ -233,7 +234,6 @@ def extract_answer(text: str, strict_parsing: bool = True, parse: bool = True, l
 
     return extract_last_integer(text)
 
-
 def parse_answer(s: str, primitive_type: type = None, list_answer: bool = False):
     """Parses a string into a mathematical expression.
 
@@ -252,6 +252,7 @@ def parse_answer(s: str, primitive_type: type = None, list_answer: bool = False)
         warning = WarningType.MAJOR
     s = remove_invalid_characters(s)
     s = remove_outer_brackets(normalize_string(s, list_answer))
+    # s = insert_implicit_mul(s)
     output, warning_new = ParseList.parse("(" + s + ")", primitive_type=primitive_type)
     warning = max(warning, warning_new)
     if output is None:
@@ -446,6 +447,14 @@ def strip(s: str):
     return s
 
 
+def split_multiletter_symbols(expr):
+    reps = {}
+    for s in list(expr.free_symbols):
+        name = s.name
+        if name.isalpha() and len(name) > 1 and not all(ch in "ABCDE" for ch in name):
+            reps[s] = Mul(*[Symbol(ch) for ch in name])
+    return expr.xreplace(reps)
+
 def check_answers(ans1, ans2):
     """Checks if two answers are equal.
 
@@ -466,11 +475,17 @@ def check_answers(ans1, ans2):
         ):
             # do approximate equal here
             if isinstance(ans1, str) or isinstance(ans2, str):
+                # sympy check equality
                 return bool(ans1 == ans2)
             err = abs(N(ans1 - ans2))
             if err < 1e-10 and err / max(abs(N(ans1)), abs(N(ans2))) < 1e-10:
                 return True
             return False
+        
+        if not isinstance(ans1, AnswerList):
+            ans1 = split_multiletter_symbols(ans1)
+        if not isinstance(ans2, AnswerList):
+            ans2 = split_multiletter_symbols(ans2)
         return bool(ans1.equals(ans2))
     except Exception as e:
         logger.warning(f"Error comparing answers {ans1} and {ans2}: {e}")
@@ -669,8 +684,6 @@ class ParsePrimitive(ParseObject):
                     locals={"binomial": sympy.binomial, "pi": sympy.pi, "E": sympy.E, "e": sympy.E, "I": sympy.I},
                 )
         except Exception as e:
-            logger.warning(f"Couldn't parse {string} with standard LaTeX commands: {e}")
-
             try:
                 string_no_eq = string
                 if "=" in string_no_eq:

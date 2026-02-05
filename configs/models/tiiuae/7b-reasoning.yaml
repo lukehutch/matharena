@@ -1,0 +1,19 @@
+model: tiiuae/Falcon-H1R-7B
+api: tiiuae
+max_tokens: 65536
+read_cost: 0.12
+write_cost: 0.2
+human_readable_id: Falcon-H1R-7B
+batch_processing: false
+use_openai_responses_api: false
+date: "2026-01-05"
+temperature: 0.6
+concurrent_requests: 16
+top_p: 0.95
+extra_body:
+  repetition_penalty: 1.1
+other_params:
+  open: true
+  creator: TIIUAE
+  parameters: 8
+  active_parameters: 8

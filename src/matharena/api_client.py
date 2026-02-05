@@ -37,6 +37,8 @@ class APIClient:
         timeout=18000,
         max_tokens=None,
         api="openai",
+        api_key_env=None,
+        base_url=None,
         max_retries=10,
         max_retries_inner=5,
         concurrent_requests=30,
@@ -155,8 +157,9 @@ class APIClient:
 
         # Prep api
         self.api = api
+        self.base_url = base_url
+        self.api_key_env = api_key_env
         self.api_key = None
-        self.base_url = None
         self.terminated = False
         self._initialize_api_keys()
 
@@ -266,10 +269,15 @@ class APIClient:
             if "via_openai" in self.kwargs:
                 del self.kwargs["via_openai"]
                 self.api = "openai"
+        elif self.api == "custom":
+            self.api = "openai"
+            self.base_url = self.base_url
+            self.api_key = os.getenv(self.api_key_env) if self.api_key_env is not None else "EMPTY"
         elif self.api == "vllm":
             return
         else:
             raise ValueError(f"API {self.api} not supported.")
+
 
         assert self.api_key is not None, "API key not found."
 
@@ -334,7 +342,7 @@ class APIClient:
                     "input_tokens": result.input_tokens,
                     "output_tokens": result.output_tokens,
                     "time": end_time - start_time,
-                    "retries": result.n_retries,
+                    "n_retries": result.n_retries,
                 }
                 yield idx, result.conversation, detailed_cost
             return
@@ -398,6 +406,7 @@ class APIClient:
                     or "grok-4" in self.model
                     or "qwen" in self.model
                     or "glm" in self.model
+                    or "moonshot" in self.model
                 )
             ):
                 new_content = []
@@ -529,7 +538,7 @@ class APIClient:
                 "cost": self._get_cost(inp, outp),
                 "input_tokens": inp,
                 "output_tokens": outp,
-                "retries": 0,
+                "n_retries": 0,
                 "time": time_end - time_start if idx == 0 else 0,  # put all in first since batch
             }
             yield idx, conversation, detailed_cost
@@ -924,7 +933,6 @@ class APIClient:
                         "tools": response_tools,
                         "input": self._drop_cot(conversation),  # Drop CoT here to save cost (stays in convo)
                         "timeout": self.timeout,
-                        "background": self.background,
                         **self.kwargs,
                     }
                     if self.background:
@@ -935,9 +943,16 @@ class APIClient:
                     request_logger.log_request(ts=ts, batch_idx=idx, request=payload, **info)
                     response = client.responses.create(**payload)
                     if self.background:
+                        time_start = time.time()
                         while response.status in {"queued", "in_progress"}:
                             time.sleep(15)
                             response = client.responses.retrieve(response.id)
+                            if time.time() - time_start > self.timeout:
+                                raise TimeoutError("Timeout waiting for background response.")
+                        try:
+                            response.usage.input_tokens
+                        except:
+                            raise ValueError("No usage info in response -> if in background, this mean exception occured.")
                     request_logger.log_response(ts=ts, batch_idx=idx, response=response.model_dump())
                 except Exception as e:
                     if "rate limit" not in str(e).lower() and "429" not in str(e):
@@ -970,6 +985,14 @@ class APIClient:
                             "container_id": out.container_id,
                         }
                     )
+                elif out.type == "web_search_call":
+                    conversation.append(
+                        {
+                            "type": "web_search_call",
+                            "query": "\n\n".join(out.action.queries) if out.action.type == "search" else out.action.type,
+                            "id": out.id,
+                        }
+                    )
                 elif out.type == "function_call":
                     function_name = out.name
                     arguments = json.loads(out.arguments)
@@ -981,6 +1004,7 @@ class APIClient:
                         try:
                             output = tool_func(**arguments)  # EXECUTE
                         except Exception as e:
+                            logger.error(f"Error executing tool {function_name}. Exception: {e}")
                             output = f"Error executing tool {function_name}. Exception: {e}"
                     if not isinstance(output, str):
                         additional_cost = output[1]
@@ -990,6 +1014,7 @@ class APIClient:
                     conversation.append(
                         {
                             "type": "function_call",
+                            "id": out.id,
                             "call_id": out.call_id,
                             "arguments": out.arguments,
                             "name": out.name,
@@ -1186,6 +1211,7 @@ class APIClient:
                         try:
                             output = tool_func(**arguments)
                         except Exception as e:
+                            logger.error(f"Error executing tool {function_name}. Exception: {e}")
                             output = f"Error executing tool {function_name}. Exception: {e}"
                         # Tools can return additional cost
                         if isinstance(output, tuple):
@@ -1208,6 +1234,11 @@ class APIClient:
                         )
 
                     was_tool_call_executed = True
+
+                if total_max_tool_calls <= sum(nb_executed_tool_calls.values()):
+                    if conversation[-1]["role"] != "assistant":
+                        conversation.append({"role": "assistant", "content": "Assistant executed more tools than allowed. \\boxed{None}"})
+                    break  # No more tool calls allowed, stop here
 
         if total_max_tool_calls > 0:
             logger.info(f"Finished on a loop without tool calls, after executing {nb_executed_tool_calls} calls total.")

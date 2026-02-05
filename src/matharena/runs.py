@@ -42,6 +42,10 @@ class Runs:
             "history",
             "detailed_costs",
         ]
+        self.optional_keys = [
+            "manual_overwrite",
+            "llm_annotation",
+        ]
         self.is_fa = is_fa
         self.comp_name = comp_name
         self.solver_name = solver_name
@@ -59,6 +63,7 @@ class Runs:
         # Initialize to default
         self.N, self.cost, self.pass_at_1 = 0, {}, None
         self.answers, self.correct, self.warnings = [], [], []
+        self.manual_overwrite, self.llm_annotation = [], []
         self.messages, self.judgment, self.history, self.detailed_costs = [], [], [], []
 
         # Path
@@ -104,7 +109,7 @@ class Runs:
             if k not in runs_dict:
                 logger.warning(f"Missing key {k} in {self.path}")
         for k in runs_dict:
-            if k not in self.sorted_keys:
+            if k not in self.sorted_keys and k not in self.optional_keys:
                 logger.warning(f"Extra key {k} in {self.path}")
 
         # Check problem info is the same
@@ -147,6 +152,8 @@ class Runs:
         assert len(self.correct) == self.N
         self.warnings = runs_dict["warnings"]
         assert len(self.warnings) == self.N
+        self.manual_overwrite = runs_dict.get("manual_overwrite", [False for _ in range(self.N)])
+        self.llm_annotation = runs_dict.get("llm_annotation", [None for _ in range(self.N)])
 
         # Load raw data, if missing patch
         self.messages = runs_dict["messages"]
@@ -247,6 +254,8 @@ class Runs:
                 ("answers", self.answers),
                 ("correct", self.correct),
                 ("warnings", self.warnings),
+                ("manual_overwrite", self.manual_overwrite),
+                ("llm_annotation", self.llm_annotation),
                 ("messages", ordered_messages),
                 ("judgment", self.judgment),
                 ("history", ordered_history),
@@ -257,7 +266,7 @@ class Runs:
     def update_aggregates(self):
         self.N = len(self.messages)
         self.cost = {}
-        for k in ["cost", "input_tokens", "output_tokens", "time", "retries", "request_time"]:
+        for k in ["cost", "input_tokens", "output_tokens", "time", "n_retries", "request_time"]:
             vals = [dc.get(k, None) for dc in self.detailed_costs]
             if any(v is None for v in vals):
                 self.cost[k] = None
@@ -307,14 +316,19 @@ class Runs:
         self.answers.append(convert_answer_to_string(answer) if answer is not None else "None")
         self.correct.append(is_correct)
         self.warnings.append(warning)
+        self.manual_overwrite.append(False)
+        self.llm_annotation.append(None)
 
         self.update_aggregates()
 
     def update_run_grading(self, idx, grader_response):
         answer, is_correct, warning = grader_response
         self.answers[idx] = convert_answer_to_string(answer) if answer is not None else "None"
-        self.correct[idx] = is_correct
-        self.warnings[idx] = warning
+        if self.manual_overwrite and idx < len(self.manual_overwrite) and self.manual_overwrite[idx]:
+            self.warnings[idx] = warning
+        else:
+            self.correct[idx] = is_correct
+            self.warnings[idx] = warning
 
         self.update_aggregates()
 
@@ -331,6 +345,8 @@ class Runs:
         self.answers = [self.answers[i] for i in indices_kept]
         self.correct = [self.correct[i] for i in indices_kept]
         self.warnings = [self.warnings[i] for i in indices_kept]
+        self.manual_overwrite = [self.manual_overwrite[i] for i in indices_kept]
+        self.llm_annotation = [self.llm_annotation[i] for i in indices_kept]
 
         self.messages = [self.messages[i] for i in indices_kept]
         self.judgment = [self.judgment[i] for i in indices_kept]

@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ metadata.title or paper_id }}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css" integrity="sha384-6x8FWJQ9gTAlJ3i9zyfiQ4R+2nD2gQnCj2lR7zA6mXUhlJ6FZpC3mbwyO0Z5y9G5" crossorigin="anonymous" />
+    <style>
+      :root {
+        --bg: #f6f7f9;
+        --ink: #121417;
+        --muted: #5b636c;
+        --accent: #0f6a5f;
+        --accent-2: #f39c38;
+        --panel: #ffffff;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif;
+        background:
+          radial-gradient(circle at 10% 20%, rgba(243, 156, 56, 0.15), transparent 45%),
+          radial-gradient(circle at 90% 0%, rgba(15, 106, 95, 0.18), transparent 40%),
+          linear-gradient(180deg, #fdfdfc 0%, var(--bg) 100%);
+        color: var(--ink);
+      }
+      .wrap {
+        max-width: 980px;
+        margin: 36px auto 72px;
+        padding: 0 20px;
+      }
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 16px;
+      }
+      h1 {
+        font-size: 2.2rem;
+        line-height: 1.2;
+        margin: 0 0 8px;
+      }
+      .meta {
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid #e6e9ed;
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0 18px 40px rgba(18, 20, 23, 0.08);
+      }
+      .section-title {
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        font-size: 0.8rem;
+        color: var(--muted);
+        margin: 24px 0 10px;
+      }
+      .authors {
+        margin: 0 0 12px;
+      }
+      .badge {
+        display: inline-block;
+        background: #eef4f3;
+        color: #33524d;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        margin-right: 6px;
+        margin-bottom: 6px;
+      }
+      form {
+        margin-top: 24px;
+        display: grid;
+        gap: 16px;
+      }
+      .row {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      label {
+        font-weight: 700;
+      }
+      textarea {
+        width: 100%;
+        min-height: 120px;
+        resize: vertical;
+        padding: 10px;
+        border-radius: 10px;
+        border: 1px solid #d4d9df;
+        font-family: inherit;
+        font-size: 1rem;
+      }
+      select {
+        padding: 8px;
+        border-radius: 10px;
+        border: 1px solid #d4d9df;
+        font-family: inherit;
+        font-size: 1rem;
+      }
+      button {
+        background: var(--accent);
+        color: white;
+        border: none;
+        padding: 10px 18px;
+        border-radius: 999px;
+        font-size: 1rem;
+        cursor: pointer;
+        letter-spacing: 0.01em;
+      }
+      button:hover {
+        filter: brightness(0.95);
+      }
+      nav {
+        margin-top: 18px;
+        display: flex;
+        gap: 12px;
+        justify-content: space-between;
+      }
+      nav a {
+        color: var(--accent);
+        text-decoration: none;
+        font-weight: 700;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      .content-text {
+        font-size: 1.05rem;
+        line-height: 1.6;
+      }
+      .meta a {
+        color: var(--accent);
+        text-decoration: none;
+      }
+      @media (max-width: 600px) {
+        h1 {
+          font-size: 1.6rem;
+        }
+      }
+    </style>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;600;700&display=swap" />
+  </head>
+  <body>
+    <div class="wrap">
+      <header>
+        <div>
+          <div class="meta">Paper {{ position }} of {{ total }}</div>
+          <h1>{{ metadata.title or paper_id }}</h1>
+          <div class="authors">
+            {% for author in metadata.authors or [] %}
+              {{ author.forenames }} {{ author.keyname }}{% if not loop.last %}, {% endif %}
+            {% endfor %}
+          </div>
+          <div class="meta">
+            <span>{{ paper_id }}</span>
+            {% if metadata.categories %}
+              · <span>{{ metadata.categories | join(", ") }}</span>
+            {% endif %}
+            {% if metadata.created %}
+              · <span>Created {{ metadata.created }}</span>
+            {% endif %}
+            {% if metadata.updated %}
+              · <span>Updated {{ metadata.updated }}</span>
+            {% endif %}
+          </div>
+        </div>
+        <div>
+          <a href="https://arxiv.org/abs/{{ metadata.id }}" target="_blank" rel="noreferrer">Open arXiv</a>
+        </div>
+      </header>
+
+        <div class="panel content-text" id="paper-content">
+        <div class="section-title">Abstract</div>
+        <div>{{ metadata.abstract or "No abstract available." }}</div>
+
+        {% if metadata.comments %}
+          <div class="section-title">Comments</div>
+          <div>{{ metadata.comments }}</div>
+        {% endif %}
+
+        {% if metadata.journal_ref %}
+          <div class="section-title">Journal</div>
+          <div>{{ metadata.journal_ref }}</div>
+        {% endif %}
+
+        {% if metadata.license %}
+          <div class="section-title">License</div>
+          <div>{{ metadata.license }}</div>
+        {% endif %}
+
+        <form action="{{ url_for('annotate', paper_id=paper_id) }}" method="post">
+          <div class="row">
+            <button type="submit" name="status" value="keep">Keep and Next</button>
+            <button type="submit" name="status" value="discard">Reject</button>
+          </div>
+          <div>
+            <label for="question">Question to extract</label>
+            <textarea id="question" name="question" placeholder="What question should we extract from this entry?" style="height: 300px">{{ annotation.question or "" }}</textarea>
+          </div>
+          <div>
+            <label for="answer">Verifiable answer</label>
+            <textarea id="answer" name="answer" placeholder="Provide the unique, verifiable answer.">{{ annotation.answer or "" }}</textarea>
+          </div>
+        </form>
+      </div>
+
+      <nav>
+        <div>
+          {% if prev_id %}
+            <a href="{{ url_for('paper_view', paper_id=prev_id) }}">Previous</a>
+          {% else %}
+            <span class="muted">Previous</span>
+          {% endif %}
+        </div>
+        <div>
+          {% if next_id %}
+            <a href="{{ url_for('skip_paper', paper_id=paper_id) }}">Skip</a>
+          {% else %}
+            <span class="muted">Skip</span>
+          {% endif %}
+        </div>
+      </nav>
+    </div>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css"
+    integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"
+    integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8"
+    crossorigin="anonymous"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+    integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05" crossorigin="anonymous"
+    onload="renderMathInElement(document.body);"></script>
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        const container = document.querySelector(".wrap");
+        if (container && window.renderMathInElement) {
+          window.renderMathInElement(container, {
+            delimiters: [
+              { left: "$$", right: "$$", display: true },
+              { left: "$", right: "$", display: false },
+              { left: "\\(", right: "\\)", display: false },
+              { left: "\\[", right: "\\]", display: true },
+            ],
+            throwOnError: false,
+          });
+        }
+      });
+    </script>
+  </body>
+</html>

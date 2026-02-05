@@ -1,3 +1,9 @@
+configs/competitions/test
+data/test/
+**/.status
+.vscode/
+.flake8
+DUMP/
 .DS_Store
 __pycache__/
 *.out

@@ -33,6 +33,14 @@ date:
   '972': '2025-12-01'
   '973': '2025-12-06'
   '974': '2025-12-13'
+  '975': '2025-12-22'
+  '976': '2025-12-27'
+  '977': '2026-01-04'
+  '978': '2026-01-11'
+  '979': '2026-01-18'
+  '980': '2026-01-25'
+  '981': '2026-01-25'
+  '982': '2026-01-01'
 instruction: "You are solving a problem from Project Euler. \nAs a tool you can use,\
   \ you are given access to a code execution environment. Invoke that tool to execute\
   \ Python or C++ code. You can execute code up to 500 times, so you can use them\
@@ -47,7 +55,7 @@ instruction: "You are solving a problem from Project Euler. \nAs a tool you can 
   \ your final answer within \\boxed{{}}, i.e., end your reply with \"### Final answer:\
   \ \\\\boxed{{your_answer_here}}\".\n"
 max_tool_calls: 500
-n_problems: 32
+n_problems: 40
 strict_parsing: false
 tools:
 - tool_spec:
@@ -73,7 +81,3 @@ tools:
     type: function
   tool_spec_gdm:
     name: code_execution
-  tool_spec_openai_responses_api:
-    container:
-      type: auto
-    type: code_interpreter

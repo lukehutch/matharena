@@ -16,6 +16,7 @@ from matharena.request_logger import request_logger
 from matharena.runs import Runs
 from matharena.solvers import AgentPool, PureModelSolver
 from matharena.tools.code_execution import execute_code
+from matharena.tools.paper_search import read_paper, query_semantic_scholar, read_pages, find_in_paper
 from matharena.utils import normalize_conversation, save_run_for_recovery
 
 
@@ -197,10 +198,12 @@ class Runner:
             dict: The default APIClient arguments with tools integrated.
         """
         tool_descriptions = self.competition_config.get("tools", [])
-        POSSIBLE_TOOL_FUNCTIONS = {"execute_code": execute_code}
+        POSSIBLE_TOOL_FUNCTIONS = {"execute_code": execute_code, "read_paper": read_paper, 
+                                   "query_semantic_scholar": query_semantic_scholar, "read_pages": read_pages, 
+                                   "find_in_paper": find_in_paper}
         tools = []
         for tool_desc in tool_descriptions:
-            if model_config.get("use_openai_responses_api_tools", model_config.get("use_openai_responses_api", False)):
+            if model_config.get("use_openai_responses_api_tools", model_config.get("use_openai_responses_api", False)) and "tool_spec_openai_responses_api" in tool_desc:
                 tools.append((None, tool_desc["tool_spec_openai_responses_api"]))
             elif model_config.get("use_gdm_tools", False):
                 name = tool_desc["tool_spec_gdm"]["name"]
@@ -211,7 +214,6 @@ class Runner:
                 if func_name in POSSIBLE_TOOL_FUNCTIONS:
                     tools.append((POSSIBLE_TOOL_FUNCTIONS[func_name], tool_spec))
         max_tool_calls = self.competition_config.get("max_tool_calls", 0)
-
         args = model_config.copy()
         args["tools"] = tools
         args["max_tool_calls"] = max_tool_calls

@@ -84,8 +84,6 @@ def is_conversation_broken(msg_list):
         return True, "Last message is not from assistant"
     if last_msg.get("type", "response") != "response":
         return True, "Last message is not a response"
-    if len(last_msg["content"].strip()) == 0:
-        return True, "Last message is empty"
     return False, ""
 
 
@@ -159,12 +157,15 @@ def normalize_conversation(messages):
         # Internal tool call
         # NOTE: we only expect code_interpreter for now, tweak code here if using more
         if role == "code-internal" or (
-            role == "assistant" and m.get("type", None) in ["internal_tool_call", "code_interpreter_call"]
+            role == "assistant" and m.get("type", None) in ["internal_tool_call", "code_interpreter_call", "web_search_call"]
         ):
             cm["role"] = "assistant"
             cm["type"] = "internal_tool_call"
-            cm["tool_name"] = "code_interpreter"  # NOTE: always this
-            cm["code"] = m.get("code", m.get("content", None))
+            cm["tool_name"] = "code_interpreter" if m.get("type", None) in ["internal_tool_call", "code_interpreter_call"] else "web_search"
+            if "web_search_call" == cm["tool_name"]:
+                cm["content"] = m.get("query", "")
+            else:
+                cm["code"] = m.get("code", m.get("content", None))
             check_for_extra_keys(m, ["role", "content", "type", "id", "container_id", "tool_name", "code", "outputs"])
             clean_messages.append(cm)
             continue

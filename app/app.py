@@ -5,7 +5,7 @@ import json
 import os
 
 import yaml
-from flask import Flask, redirect, render_template, url_for, send_from_directory
+from flask import Flask, redirect, render_template, url_for, send_from_directory, request, abort
 from pyparsing import srange
 from torch import ScriptDict
 
@@ -23,9 +23,20 @@ parser.add_argument("--port", type=int, default=5001)
 parser.add_argument("--output-folder", type=str, default="outputs")
 parser.add_argument("--config-folder", type=str, default="configs/models")
 parser.add_argument("--competition-config-folder", type=str, default="configs/competitions")
+parser.add_argument(
+    "--disable-overwrite",
+    action="store_true",
+    help="Disable /override routes from writing result files.",
+)
+parser.add_argument(
+    "--disable-debug",
+    action="store_true",
+    help="Disable Flask debug mode.",
+)
 args = parser.parse_args()
 
 current_comp = args.comp if args.comp is not None else "imo/imo_2025"  # fast-loading default comp
+model_id_to_config_path = {}
 
 # Find all comps, directories below outputs of depth 2
 all_comps = []
@@ -40,6 +51,7 @@ all_comps = sorted(all_comps, key=lambda x: os.path.getmtime(os.path.join(args.o
 
 
 def analyze_run(competition, models):
+    global model_id_to_config_path
     configs, human_readable_ids = extract_existing_configs(
         competition,
         args.output_folder,
@@ -52,6 +64,7 @@ def analyze_run(competition, models):
             if human_readable_ids[config_path] not in models:
                 del human_readable_ids[config_path]
                 del configs[config_path]
+    model_id_to_config_path = {human_readable_ids[k]: k for k in human_readable_ids}
     out_dir = os.path.join(args.output_folder, competition)
 
     results = {}
@@ -95,23 +108,52 @@ def get_problem_stats(results, model, problem):
         problem = int(problem)
     res = results[model][problem]
     corrects = res["correct"]
-    warnings = res.get("warnings", [False] * len(corrects))
+    warnings = res.get("warnings", [0] * len(corrects))
+    llm_annotations = res.get("llm_annotation", [None] * len(corrects))
+    manual_overwrite = res.get("manual_overwrite", [False] * len(corrects))
+    if not isinstance(llm_annotations, list):
+        llm_annotations = [None] * len(corrects)
+    if not isinstance(manual_overwrite, list):
+        manual_overwrite = [False] * len(corrects)
+    if len(llm_annotations) < len(corrects):
+        llm_annotations = llm_annotations + [None] * (len(corrects) - len(llm_annotations))
+    elif len(llm_annotations) > len(corrects):
+        llm_annotations = llm_annotations[: len(corrects)]
+    if len(manual_overwrite) < len(corrects):
+        manual_overwrite = manual_overwrite + [False] * (len(corrects) - len(manual_overwrite))
+    elif len(manual_overwrite) > len(corrects):
+        manual_overwrite = manual_overwrite[: len(corrects)]
+    llm_annotations = [
+        None if manual_overwrite[i] else llm_annotations[i] for i in range(len(corrects))
+    ]
     if len(corrects) == 0:
         return {
             "nb_instances": 0,
             "corrects": [],
             "accuracy": 0,
+            "warnings": [],
+            "llm_annotations": [],
+            "manual_overwrite": [],
         }
     nb_inst = len(corrects)
     try:
         acc = sum(corrects) / nb_inst
     except Exception:
         acc = 0
-    return {"nb_instances": nb_inst, "corrects": corrects, "accuracy": acc, "warnings": warnings}
+    return {
+        "nb_instances": nb_inst,
+        "corrects": corrects,
+        "accuracy": acc,
+        "warnings": warnings,
+        "llm_annotations": llm_annotations,
+        "manual_overwrite": manual_overwrite,
+    }
 
 
-def get_tick(is_correct, warning):
-    if is_correct:
+def get_tick(is_correct, warning, llm_annotation=None):
+    if (not is_correct) and llm_annotation is True:
+        tick = "🤖"
+    elif is_correct:
         tick = "✅"
     elif not is_correct and warning == 0:
         tick = "❌"
@@ -129,7 +171,7 @@ def get_problem_ticks(results, model, problem):
     stat = get_problem_stats(results, model, problem)
     ticks = ""
     for i, correct in enumerate(stat["corrects"]):
-        ticks += get_tick(correct, stat["warnings"][i])
+        ticks += get_tick(correct, stat["warnings"][i], stat["llm_annotations"][i])
     return ticks
 
 
@@ -162,7 +204,7 @@ def model_stats_to_html(stats):
         p += f"{stat['accuracy']*100:6.2f}% "
         p += f"{stat['nb_instances']} instances: "
         for i, correct in enumerate(stat["corrects"]):
-            p += get_tick(correct, stat["warnings"][i])
+            p += get_tick(correct, stat["warnings"][i], stat["llm_annotations"][i])
         problem_stats_html.append(p)
     return {
         "avg_accuracy": f"{stats['avg_accuracy']*100:.2f}%",
@@ -479,13 +521,33 @@ def problem_view(model, problem_name):
 
     solution = res["gold_answer"]
     instances = []
+    llm_annotations = res.get("llm_annotation", [None] * len(res["correct"]))
+    manual_overwrite = res.get("manual_overwrite", [False] * len(res["correct"]))
+    if not isinstance(llm_annotations, list):
+        llm_annotations = [None] * len(res["correct"])
+    if not isinstance(manual_overwrite, list):
+        manual_overwrite = [False] * len(res["correct"])
+    if len(llm_annotations) < len(res["correct"]):
+        llm_annotations = llm_annotations + [None] * (len(res["correct"]) - len(llm_annotations))
+    elif len(llm_annotations) > len(res["correct"]):
+        llm_annotations = llm_annotations[: len(res["correct"])]
+    if len(manual_overwrite) < len(res["correct"]):
+        manual_overwrite = manual_overwrite + [False] * (len(res["correct"]) - len(manual_overwrite))
+    elif len(manual_overwrite) > len(res["correct"]):
+        manual_overwrite = manual_overwrite[: len(res["correct"])]
+    llm_annotations = [
+        None if manual_overwrite[i] else llm_annotations[i] for i in range(len(res["correct"]))
+    ]
     for i, messages in enumerate(res["messages"]):
         answer, is_correct = res["answers"][i], res["correct"][i]
         warning = res["warnings"][i] if "warnings" in res else 0
-        verdict = get_tick(is_correct, warning)
+        verdict = get_tick(is_correct, warning, llm_annotations[i])
         correct_cls = "correct" if is_correct else "incorrect"
         history = results[model][int(problem_name)].get("history", [])
         run_history = history[i] if i < len(history) else None
+        manual_value = "auto"
+        if manual_overwrite[i]:
+            manual_value = "correct" if is_correct else "incorrect"
         
         metadata = get_instance_metadata(run_history if run_history is not None else [{"messages": messages}])
         metadata['cost'] = res["detailed_costs"][i]
@@ -501,6 +563,7 @@ def problem_view(model, problem_name):
                 "history": run_history,
                 "conversation_id": f"{model}>>{problem_name}>>{i}",
                 "metadata": metadata,
+                "manual_value": manual_value,
             }
         )
 
@@ -515,6 +578,7 @@ def problem_view(model, problem_name):
         sidebar=sidebar_contents,
         model=model,
         problem_name=problem_full_name,
+        problem_id=problem_name,
         ticks=ticks,
         problem_statement=problem_statement,
         img_path=img_path,
@@ -525,5 +589,69 @@ def problem_view(model, problem_name):
     )
 
 
+@app.route("/override/<model>/<problem_name>/<int:run_idx>", methods=["POST"])
+def override_result(model, problem_name, run_idx):
+    global results
+    if args.disable_overwrite:
+        abort(403)
+    action = request.form.get("manual_correct", "auto")
+    config_path = model_id_to_config_path.get(model)
+    if config_path is None:
+        return redirect(url_for("problem_view", model=model, problem_name=problem_name))
+
+    json_path = os.path.join(args.output_folder, current_comp, config_path, f"{problem_name}.json")
+    if not os.path.exists(json_path):
+        return redirect(url_for("problem_view", model=model, problem_name=problem_name))
+
+    with open(json_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    correct = data.get("correct", [])
+    if not isinstance(correct, list) or run_idx >= len(correct):
+        return redirect(url_for("problem_view", model=model, problem_name=problem_name))
+
+    manual_overwrite = data.get("manual_overwrite", [False] * len(correct))
+    if not isinstance(manual_overwrite, list):
+        manual_overwrite = [False] * len(correct)
+    if len(manual_overwrite) < len(correct):
+        manual_overwrite = manual_overwrite + [False] * (len(correct) - len(manual_overwrite))
+    elif len(manual_overwrite) > len(correct):
+        manual_overwrite = manual_overwrite[: len(correct)]
+
+    llm_annotation = data.get("llm_annotation", [None] * len(correct))
+    if not isinstance(llm_annotation, list):
+        llm_annotation = [None] * len(correct)
+    if len(llm_annotation) < len(correct):
+        llm_annotation = llm_annotation + [None] * (len(correct) - len(llm_annotation))
+    elif len(llm_annotation) > len(correct):
+        llm_annotation = llm_annotation[: len(correct)]
+
+    if action in ["correct", "incorrect"]:
+        correct[run_idx] = action == "correct"
+        manual_overwrite[run_idx] = True
+        llm_annotation[run_idx] = None
+    else:
+        manual_overwrite[run_idx] = False
+
+    data["correct"] = correct
+    data["manual_overwrite"] = manual_overwrite
+    data["llm_annotation"] = llm_annotation
+    try:
+        data["pass_at_1"] = sum(correct) / len(correct) if correct else 0
+    except Exception:
+        data["pass_at_1"] = data.get("pass_at_1")
+
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+
+    if model in results and int(problem_name) in results[model]:
+        results[model][int(problem_name)]["correct"] = correct
+        results[model][int(problem_name)]["manual_overwrite"] = manual_overwrite
+        results[model][int(problem_name)]["llm_annotation"] = llm_annotation
+        results[model][int(problem_name)]["pass_at_1"] = data["pass_at_1"]
+
+    return redirect(url_for("problem_view", model=model, problem_name=problem_name))
+
+
 if __name__ == "__main__":
-    app.run(debug=True, port=args.port)
+    app.run(debug=not args.disable_debug, port=args.port)

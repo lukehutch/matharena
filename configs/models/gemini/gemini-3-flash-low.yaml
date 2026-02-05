@@ -1,0 +1,30 @@
+model: gemini-3-flash-preview
+api: google
+temperature: null
+top_p: null
+concurrent_requests: 32
+max_tokens: 64000
+read_cost: 0.5
+tool_choice: auto
+write_cost: 3
+human_readable_id: Gemini 3 Flash (low)
+date: "2025-12-17"
+extra_body:
+  extra_body:
+    google:
+      thinking_config:
+        include_thoughts: true
+        thinking_level: minimal
+other_params:
+  open: false
+  creator: Google
+
+custom_instructions:
+  aime/aime_2025: "Put your final answer within \\boxed{{}}."
+  hmmt/hmmt_nov_2025: "Put your final answer within \\boxed{{}}."
+  hmmt/hmmt_feb_2025: "Put your final answer within \\boxed{{}}."
+  cmimc/cmimc_2025: "Put your final answer within \\boxed{{}}."
+  smt/smt_2025: "Put your final answer within \\boxed{{}}."
+  brumo/brumo_2025: "Put your final answer within \\boxed{{}}."
+  apex/apex_2025: "Put your final answer within \\boxed{{}}."
+  apex/shortlist_2025: "Put your final answer within \\boxed{{}}."

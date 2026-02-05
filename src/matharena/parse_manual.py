@@ -51,6 +51,9 @@ manual_mapper = {
     "2, 3, \\frac{3 \\pm i \\sqrt{3}}{2}": "2,3,\\frac{3 + i\\sqrt{3}}{2}, \\frac{3 - i\\sqrt{3}}{2}",
     "(N+1)^2(4N+1)": "4N^3+9N^2+6N+1",
     "(N+1)^2 (4N+1)": "4N^3+9N^2+6N+1",
+    "a\\in\\left\\{2,\\ 3,\\ 2+\\omega,\\ 2+\\omega^2\\right\\}": "2,3,\\frac{3 + i\\sqrt{3}}{2}, \\frac{3 - i\\sqrt{3}}{2}",
+    "\\frac{n(n-1)}2": "\\frac{n^2 - n}{2}",
+    "\\text{Bob wins exactly for those }G\\text{ with }\\forall p,\\ \\bigoplus_i a_{p,i}=0,\\ \\text{ and the requested sum is }505.": "505"
 }
 
 # maps a full response to the answer, in case no \boxed{} is present

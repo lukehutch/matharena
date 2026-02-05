@@ -3,6 +3,9 @@ import argparse
 from loguru import logger
 
 from matharena.runner import Runner
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Main args: which competition to run with which models; how many runs per problem
 parser = argparse.ArgumentParser()

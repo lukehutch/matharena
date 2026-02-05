@@ -1,4 +1,4 @@
-instruction: "Please reason step by step, and put your final answer within \\boxed{{}}. Thus, format your final answer as follows:\n\n### Final answer\n\nThe final answer is \\boxed{{your final answer}}."
+instruction: "Put your final answer within \\boxed{{}}. Thus, format your final answer as follows:\n\n### Final answer\n\nThe final answer is \\boxed{{your final answer}}."
 strict_parsing: false
 n_problems: 40
 date: "2025-07-29"

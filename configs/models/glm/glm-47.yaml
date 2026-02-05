@@ -1,0 +1,15 @@
+model: glm-4.7
+api: glm
+max_tokens: 122880
+concurrent_requests: 32
+temperature: 1
+top_p: null
+read_cost: 0.6
+write_cost: 2.2
+human_readable_id: GLM 4.7
+date: "2025-12-24"
+other_params:
+  open: true
+  creator: Z.ai
+  parameters: 355
+  active_parameters: 32

@@ -53,6 +53,15 @@
         </details>
         <p class="strong">[Run {{ instance.run }}] Parsed Answer ({{ instance.verdict }}, {{ instance.warnings }} warnings):</p>
         <div class="box answer-box {{ instance.correct_cls }}">{{ instance.answer }}</div>
+        <form method="post" action="{{ url_for('override_result', model=model, problem_name=problem_id, run_idx=instance.run) }}" class="override-form">
+            <label for="manual-correct-{{ instance.run }}">Manual override:</label>
+            <select id="manual-correct-{{ instance.run }}" name="manual_correct">
+                <option value="auto" {% if instance.manual_value == "auto" %}selected{% endif %}>Auto</option>
+                <option value="correct" {% if instance.manual_value == "correct" %}selected{% endif %}>Correct</option>
+                <option value="incorrect" {% if instance.manual_value == "incorrect" %}selected{% endif %}>Incorrect</option>
+            </select>
+            <button type="submit">Save</button>
+        </form>
     {% endfor %}
 
     {% if boxes_expanded %}

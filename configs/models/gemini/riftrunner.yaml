@@ -2,12 +2,12 @@ model: gemini-3-pro-preview
 api: google
 temperature: null
 top_p: null
-concurrent_requests: 8
+concurrent_requests: 32
 max_tokens: 250000
 read_cost: 2
 tool_choice: auto
 write_cost: 12
-human_readable_id: Gemini 3 Pro
+human_readable_id: Gemini 3 Pro (preview)
 date: "2025-11-19"
 extra_body:
   extra_body:

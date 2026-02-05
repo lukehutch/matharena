@@ -114,12 +114,21 @@ if __name__ == "__main__":
         df["parsed_answer"] = df["parsed_answer"].astype(str)
     
     if not args.visual_dataset:
-        logger.info(f"Uploading dataset with {len(df)} samples to dataset {args.repo_name} in org {args.org}")
-        dataset = Dataset.from_pandas(df)
-        dataset.push_to_hub(
-            os.path.join(args.org, args.repo_name),
-            private=not args.public,
-        )
+        
+        if args.local_save_path is not None:
+            if len(os.path.dirname(args.local_save_path)) > 0:
+                os.makedirs(os.path.dirname(args.local_save_path), exist_ok=True)
+            # remove the history col
+            logger.info(f"Saving dataset locally to {args.local_save_path}")
+            df.to_json(args.local_save_path, index=False, orient="records", lines=True)
+            logger.info(f"Saved dataset locally to {args.local_save_path}")
+        else:
+            logger.info(f"Uploading dataset with {len(df)} samples to dataset {args.repo_name} in org {args.org}")
+            dataset = Dataset.from_pandas(df)
+            dataset.push_to_hub(
+                os.path.join(args.org, args.repo_name),
+                private=not args.public,
+            )
     else:
         df.to_csv(os.path.join("temp", "metadata.csv"), index=False)
         logger.info(f"Uploading visual dataset with {len(df)} samples to dataset {args.repo_name} in org {args.org}")
