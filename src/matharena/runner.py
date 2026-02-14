@@ -14,7 +14,7 @@ from matharena.grader import extract_and_grade
 from matharena.parser import extract_answer
 from matharena.request_logger import request_logger
 from matharena.runs import Runs
-from matharena.solvers import AgentPool, PureModelSolver
+from matharena.solvers import AgentPool, CLISolver, PureModelSolver
 from matharena.tools.code_execution import execute_code
 from matharena.tools.paper_search import read_paper, query_semantic_scholar, read_pages, find_in_paper
 from matharena.utils import normalize_conversation, save_run_for_recovery
@@ -166,6 +166,17 @@ class Runner:
             solver_config["model_config"].pop("human_readable_id")
             if "other_params" in solver_config["model_config"]:
                 solver_config["model_config"].pop("other_params")
+        elif solver_type == "cli":
+            model_config = solver_config
+            solver_config = {
+                "human_readable_id": model_config["human_readable_id"],
+                "type": "cli",
+                "model_config": model_config,
+                "scaffold_config": None,
+            }
+            solver_config["model_config"].pop("human_readable_id")
+            if "other_params" in solver_config["model_config"]:
+                solver_config["model_config"].pop("other_params")
         elif solver_type == "agent":
             # Load the inner configs (model/scaffold)
             scaffold_config_path = os.path.join("configs", solver_config["scaffold_config"] + ".yaml")
@@ -175,7 +186,7 @@ class Runner:
             model_config_path = os.path.join("configs", solver_config["model_config"] + ".yaml")
             with open(model_config_path, "r") as f:
                 model_config = yaml.safe_load(f)
-            
+
             if "other_params" in model_config:
                 model_config.pop("other_params")
 
@@ -251,6 +262,8 @@ class Runner:
         """
         if solver_config["type"] == "pure_model":
             return PureModelSolver(solver_config, default_prompt_template, default_api_client_args, last_chance_prompt)
+        elif solver_config["type"] == "cli":
+            return CLISolver(solver_config, default_prompt_template, default_api_client_args, last_chance_prompt)
         elif solver_config["type"] == "agent":
             return AgentPool(solver_config, default_prompt_template, default_api_client_args, last_chance_prompt)
         else:

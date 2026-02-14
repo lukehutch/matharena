@@ -1,0 +1,14 @@
+model: derive-multi-agent
+api: cli
+human_readable_id: Derive (Multi-Agent)
+type: cli
+cli_command: node
+cli_args:
+  - /home/luke/Work/derive/benchmark/solve.mjs
+timeout: 600
+read_cost: 0
+write_cost: 0
+date: "2025-02-13"
+other_params:
+  open: false
+  creator: Derive
