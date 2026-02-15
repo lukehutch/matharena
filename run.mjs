@@ -32,7 +32,7 @@ function getArg(name, fallback) {
   const idx = process.argv.indexOf(`--${name}`);
   return idx >= 0 && process.argv[idx + 1] ? process.argv[idx + 1] : fallback;
 }
-const MAX_PARALLEL = parseInt(getArg('max-parallel', '10'), 10);
+const MAX_PARALLEL = parseInt(getArg('max-parallel', '2'), 10);
 const TIMEOUT_SEC = parseInt(getArg('timeout', '600'), 10);
 const OUTPUT_DIR = resolve(getArg('output-dir', resolve(PROJECT_ROOT, '.derive', 'benchmark', 'outputs', 'aime_2025')));
 const PROBLEM_FILTER = getArg('problems', null);
@@ -55,6 +55,7 @@ function runCommand(command, args, options = {}) {
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+    activeChildren.add(child);
 
     child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
     child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
@@ -69,11 +70,13 @@ function runCommand(command, args, options = {}) {
 
     child.on('error', (err) => {
       if (timeout) clearTimeout(timeout);
+      activeChildren.delete(child);
       reject(err);
     });
 
     child.on('close', (code, signal) => {
       if (timeout) clearTimeout(timeout);
+      activeChildren.delete(child);
       resolve({
         exitCode: code ?? -1,
         signal: signal ?? null,
@@ -251,7 +254,15 @@ const C = {
 
 const activeChildren = new Set();
 let cancelled = false;
+let cleaningUp = false;
 function cleanup() {
+  if (cleaningUp) {
+    for (const child of activeChildren) {
+      try { child.kill('SIGKILL'); } catch {}
+    }
+    process.exit(1);
+  }
+  cleaningUp = true;
   cancelled = true;
   process.stderr.write(`\n${C.yellow}Interrupted — killing ${activeChildren.size} child processes, cancelling remaining tasks...${C.reset}\n`);
   for (const child of activeChildren) {
@@ -303,7 +314,7 @@ function solveProblem(problem, tmpDir) {
     const timeoutHandle = setTimeout(() => {
       logStatus(problem.idx, `TIMEOUT after ${TIMEOUT_SEC}s — killing`, C.red);
       try { child.kill('SIGTERM'); } catch {}
-      setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 5000);
+      setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 5000).unref();
     }, TIMEOUT_SEC * 1000);
 
     child.stdin.end(prompt);
@@ -739,10 +750,9 @@ async function main() {
     process.stderr.write(`  ${C.dim}Could not fetch leaderboard data.${C.reset}\n`);
   }
 
-  process.stderr.write(`\n  ${C.dim}Results written to: ${OUTPUT_DIR}/${C.reset}\n\n`);
-
-  /* Output summary JSON to stdout. */
-  console.log(JSON.stringify({
+  /* Write summary JSON to output dir instead of dumping to console. */
+  const summaryPath = resolve(OUTPUT_DIR, 'summary.json');
+  writeFileSync(summaryPath, JSON.stringify({
     competition: 'AIME 2025',
     model: 'Derive Multi-Agent',
     accuracy: problems.length > 0 ? correct / problems.length : 0,
@@ -751,6 +761,8 @@ async function main() {
     totalTime,
     scoreboard: scoreboard.map((s) => ({ ...s, roundScores: undefined, roundCorrectness: s.roundCorrectness })),
   }, null, 2));
+
+  process.stderr.write(`\n  ${C.dim}Results written to: ${OUTPUT_DIR}/${C.reset}\n\n`);
 }
 
 main().catch((err) => {

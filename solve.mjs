@@ -10,9 +10,7 @@
  */
 
 import { spawn } from 'child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
-import { join } from 'path';
-import { homedir } from 'os';
+import { mkdirSync } from 'fs';
 
 const CLAUDE_MODEL = process.env.DERIVE_CLAUDE_MODEL ?? 'claude-opus-4-6';
 const CODEX_MODEL = process.env.DERIVE_CODEX_MODEL ?? 'gpt-5.3-codex';
@@ -88,11 +86,25 @@ const OUTPUT_INSTRUCTIONS = process.env.DERIVE_OUTPUT_INSTRUCTIONS ?? DEFAULT_OU
 
 /* Track all spawned child processes for cleanup on Ctrl+C. */
 const activeChildren = new Set();
+let cleaningUp = false;
 function cleanup() {
+  if (cleaningUp) {
+    for (const child of activeChildren) {
+      try { child.kill('SIGKILL'); } catch {}
+    }
+    process.exit(1);
+  }
+  cleaningUp = true;
+  log(`[derive] Interrupted — killing ${activeChildren.size} child processes...`);
   for (const child of activeChildren) {
     try { child.kill('SIGTERM'); } catch {}
   }
-  process.exit(1);
+  setTimeout(() => {
+    for (const child of activeChildren) {
+      try { child.kill('SIGKILL'); } catch {}
+    }
+    process.exit(1);
+  }, 2000);
 }
 process.on('SIGINT', cleanup);
 process.on('SIGTERM', cleanup);
@@ -143,43 +155,6 @@ const SCRATCH_DIRS = {
 };
 for (const dir of Object.values(SCRATCH_DIRS)) mkdirSync(dir, { recursive: true });
 
-/* Gemini CLI writes runtime/chat state to ~/.gemini/tmp/<project_hash>/...
-   which may be unwritable in constrained benchmark environments. Give it an
-   isolated writable home under our scratch root and seed required auth files. */
-const GEMINI_HOME = `${SCRATCH_ROOT}/gemini-home`;
-
-function seedGeminiHome() {
-  const sourceHome = process.env.GEMINI_CLI_HOME || homedir();
-  if (!sourceHome) return;
-
-  const sourceGeminiDir = join(sourceHome, '.gemini');
-  const targetGeminiDir = join(GEMINI_HOME, '.gemini');
-  mkdirSync(targetGeminiDir, { recursive: true });
-  mkdirSync(join(targetGeminiDir, 'tmp'), { recursive: true });
-
-  const filesToCopy = [
-    'settings.json',
-    'oauth_creds.json',
-    'google_accounts.json',
-    'installation_id',
-    'trustedFolders.json',
-    'state.json',
-  ];
-
-  for (const file of filesToCopy) {
-    const src = join(sourceGeminiDir, file);
-    const dst = join(targetGeminiDir, file);
-    if (!existsSync(src) || existsSync(dst)) continue;
-    try {
-      writeFileSync(dst, readFileSync(src));
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log(`[derive] gemini: warning: failed to seed ${file}: ${msg}`);
-    }
-  }
-}
-seedGeminiHome();
-
 /**
  * Spawn a CLI agent and return its output.
  * If the prompt is already embedded in `args` (e.g. gemini -p <prompt>),
@@ -193,8 +168,11 @@ function runAgent(command, args, prompt, label, cwd, { promptInArgs = false } = 
     const env = { ...process.env };
     delete env.CLAUDECODE;
     if (command === 'gemini') {
-      env.GEMINI_CLI_HOME = GEMINI_HOME;
-      env.HOME = GEMINI_HOME;
+      /* Do NOT set GEMINI_CLI_HOME or HOME — gemini CLI uses GEMINI_CLI_HOME
+         (falling back to HOME) to find ~/.gemini/ for auth credentials.
+         Overriding it breaks auth with stale/missing tokens. Session isolation
+         is handled by the per-agent scratch dir used as cwd. */
+      delete env.GEMINI_CLI_HOME;
     }
 
     const child = spawn(command, args, {
@@ -208,7 +186,7 @@ function runAgent(command, args, prompt, label, cwd, { promptInArgs = false } = 
     const timeout = setTimeout(() => {
       log(`[derive] ${label}: TIMEOUT after ${AGENT_TIMEOUT_MS / 1000}s — killing`);
       try { child.kill('SIGTERM'); } catch {}
-      setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 5000);
+      setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, 5000).unref();
     }, AGENT_TIMEOUT_MS);
 
     child.stdin.on('error', () => { /* ignore EPIPE if child exits before stdin is written */ });
@@ -243,7 +221,8 @@ async function runClaude(prompt, label, model = COMBINER_MODEL) {
   if (result.exitCode !== 0) {
     const fallback = FALLBACKS[model];
     if (fallback && fallback !== model && isQuotaError(result.stderr)) {
-      log(`[derive] ${label}: ${model} quota exceeded — retrying with ${fallback}`);
+      const serverMsg = (result.stdout + '\n' + result.stderr).trim().replace(/\n/g, ' | ');
+      log(`[derive] ${label}: ${model} quota exceeded — falling back to ${fallback}. Server: ${serverMsg}`);
       return runAgent('claude', claudeArgs(fallback), prompt, label, cwd);
     }
     if (isTransientError(result.stderr, false)) {
@@ -271,7 +250,8 @@ async function runAgentWithFallback(command, args, prompt, label, model, opts = 
   if (result.exitCode !== 0) {
     const fallback = FALLBACKS[model];
     if (fallback && fallback !== model && isQuotaError(result.stderr)) {
-      log(`[derive] ${label}: ${model} quota exceeded — retrying with ${fallback}`);
+      const serverMsg = (result.stdout + '\n' + result.stderr).trim().replace(/\n/g, ' | ');
+      log(`[derive] ${label}: ${model} quota exceeded — falling back to ${fallback}. Server: ${serverMsg}`);
       const newArgs = rebuildArgs ? rebuildArgs(fallback, prompt) : args.map(a => a === model ? fallback : a);
       return runAgent(command, newArgs, prompt, label, undefined, { promptInArgs });
     }
@@ -315,6 +295,33 @@ function extractContent(result) {
   return raw;
 }
 
+/** Extract the last \\boxed{...} answer from text. */
+function extractBoxedAnswer(text) {
+  if (!text) return null;
+  let latest = null;
+  let searchFrom = 0;
+  const marker = '\\boxed{';
+  while (true) {
+    const markerIdx = text.indexOf(marker, searchFrom);
+    if (markerIdx === -1) break;
+    const contentStart = markerIdx + marker.length;
+    let depth = 1;
+    let idx = contentStart;
+    while (idx < text.length && depth > 0) {
+      if (text[idx] === '{') depth++;
+      else if (text[idx] === '}') depth--;
+      idx++;
+    }
+    if (depth === 0) {
+      latest = text.slice(contentStart, idx - 1).trim();
+      searchFrom = idx;
+    } else {
+      searchFrom = markerIdx + marker.length;
+    }
+  }
+  return latest;
+}
+
 /** Extract JSON from text, stripping markdown fences. */
 function extractJson(text) {
   const trimmed = text.trim();
@@ -333,23 +340,45 @@ function extractJson(text) {
 function buildCritiquePrompt(problem, agentResponses, combinedResponse, round) {
   const agentNames = Object.keys(agentResponses);
   const targetNames = [...agentNames, 'combined'];
-  let prompt = `You are a mathematical reviewer. Score each solution to the following problem.\n\n`;
+  let prompt = `You are a rigorous mathematical reviewer. Your job is to independently verify each solution to the following problem.\n\n`;
   prompt += `<PROBLEM>\n${problem}\n</PROBLEM>\n\n`;
   for (const name of agentNames) {
     prompt += `<SOLUTION agent="${name}">\n${agentResponses[name]}\n</SOLUTION>\n\n`;
   }
   prompt += `<COMBINED_SOLUTION>\n${combinedResponse}\n</COMBINED_SOLUTION>\n\n`;
   prompt += `CRITIQUE ROUND: ${round}\n\n`;
-  prompt += `INSTRUCTIONS:\n`;
-  prompt += `1. Assess each solution for mathematical correctness, completeness, and rigor.\n`;
-  prompt += `2. Score each on 0-100. Use 100 only when the solution is mathematically perfect.\n`;
-  prompt += `3. Provide concise, actionable feedback for each.\n`;
-  prompt += `4. Apply identical rigor to ALL solutions. Do NOT inflate or deflate any.\n\n`;
+  prompt += `INSTRUCTIONS:\n\n`;
+  prompt += `STEP 1 — SOLVE INDEPENDENTLY FIRST:\n`;
+  prompt += `Before reading the solutions in detail, work through the problem yourself from scratch.\n`;
+  prompt += `Show your complete independent solution with all steps justified.\n`;
+  prompt += `Arrive at your own answer before comparing with any of the submitted solutions.\n\n`;
+  prompt += `STEP 2 — COMPARE AND VERIFY EACH SOLUTION:\n`;
+  prompt += `Now compare each solution against your own independent work.\n`;
+  prompt += `For each solution, trace through every logical step and computation:\n`;
+  prompt += `- Verify each formula, identity, or counting argument is correctly applied\n`;
+  prompt += `- Check that case enumerations are exhaustive and non-overlapping\n`;
+  prompt += `- Verify all arithmetic and algebraic manipulations step by step\n`;
+  prompt += `- If a solution disagrees with your independent answer, carefully determine which is correct by re-deriving the disputed step in detail\n\n`;
+  prompt += `ANTI-BIAS WARNING:\n`;
+  prompt += `You MUST NOT be biased toward or against any particular solution based on its source, length, style, or confidence of presentation.\n`;
+  prompt += `A longer or more detailed solution is NOT necessarily more correct.\n`;
+  prompt += `A solution labeled "combined" is NOT necessarily better than individual solutions.\n`;
+  prompt += `Judge ONLY on mathematical correctness. If a minority solution has the right answer and the majority is wrong, say so.\n\n`;
+  prompt += `STEP 3 — SCORE EACH SOLUTION:\n`;
+  prompt += `For each solution, declare:\n`;
+  prompt += `   - "correct": true/false — is the final answer correct and the reasoning sound?\n`;
+  prompt += `   - "answer": the extracted \\boxed{} value\n`;
+  prompt += `   - "score": 0-100 reflecting answer correctness:\n`;
+  prompt += `     100 = correct final answer (even if working is imperfect or verbose)\n`;
+  prompt += `     50-99 = approach is sound but you cannot fully verify the answer\n`;
+  prompt += `     0-49 = final answer is wrong or contains a fatal mathematical error\n`;
+  prompt += `   - "justification": detailed reasoning for the score — walk through the key steps of the solution and explain specifically which are correct and which (if any) contain errors. Cite the exact step where an error occurs and show the correct calculation.\n`;
+  prompt += `   Do NOT penalize correct answers for stylistic issues or suboptimal working.\n\n`;
   const exampleObj = {};
   for (const name of targetNames) {
-    exampleObj[name] = { score: '<0-100>', feedback: '<concise feedback>' };
+    exampleObj[name] = { answer: '<extracted boxed value>', correct: '<true/false>', score: '<0-100>', justification: '<your reasoning>' };
   }
-  prompt += `Respond with ONLY a JSON object mapping each target to {score, feedback}:\n`;
+  prompt += `Respond with ONLY a JSON object:\n`;
   prompt += JSON.stringify(exampleObj, null, 2) + '\n';
   return prompt;
 }
@@ -360,38 +389,75 @@ function buildRefinementPrompt(problem, agentName, previousResponse, scores, con
   prompt += `<PROBLEM>\n${problem}\n</PROBLEM>\n\n`;
   prompt += `YOUR PREVIOUS RESPONSE:\n${previousResponse}\n\n`;
   if (scores.length > 0) {
-    prompt += `SCORES YOUR RESPONSE RECEIVED:\n`;
-    for (const s of scores) prompt += `  ${s.reviewer}: ${s.score}/100 — ${s.feedback}\n`;
+    prompt += `REVIEWER ASSESSMENTS OF YOUR RESPONSE:\n`;
+    for (const s of scores) {
+      const correctStr = s.correct === true ? 'CORRECT' : s.correct === false ? 'INCORRECT' : 'UNKNOWN';
+      prompt += `  ${s.reviewer}: ${correctStr} (${s.score}/100) — ${s.feedback}\n`;
+    }
     prompt += '\n';
   }
   prompt += `CURRENT CONSENSUS RESPONSE:\n${consensusResponse}\n\n`;
   prompt += `REFINEMENT ROUND: ${round + 1}\n\n`;
   prompt += `Produce a solution that is BETTER than the consensus response. `;
   prompt += `Correct any errors, fill any gaps, and improve rigor. `;
+  prompt += `For every claim and intermediate result, provide a detailed justification explaining WHY it is true. `;
+  prompt += `If reviewers flagged an error, re-derive that step from scratch and show the correct computation. `;
   prompt += `Show all mathematical work explicitly in LaTeX format — do not use code execution.`;
   prompt += OUTPUT_INSTRUCTIONS;
   return prompt;
 }
 
 /** Build combine prompt. */
-function buildCombinePrompt(problem, agentResponses) {
-  let prompt = `You are combining independent solutions to a math problem. `;
-  prompt += `Review all solutions, identify the correct approach, and produce a single authoritative solution.\n\n`;
+function buildCombinePrompt(problem, agentResponses, critiqueFeedback = null) {
+  let prompt = `You are combining independent solutions to a math problem into the most correct consensus response possible.\n\n`;
   prompt += `<PROBLEM>\n${problem}\n</PROBLEM>\n\n`;
   for (const [name, content] of Object.entries(agentResponses)) {
     prompt += `<SOLUTION agent="${name}">\n${content}\n</SOLUTION>\n\n`;
   }
-  prompt += `Synthesize the best solution. If solutions disagree, carefully verify each approach. `;
-  prompt += `Show all mathematical work explicitly in LaTeX format.`;
+  if (critiqueFeedback) {
+    prompt += `<REVIEWER_FEEDBACK>\n`;
+    prompt += `The following reviewers independently solved the problem and then verified each solution:\n\n`;
+    for (const [reviewer, feedback] of Object.entries(critiqueFeedback)) {
+      prompt += `Reviewer "${reviewer}":\n`;
+      for (const [target, critique] of Object.entries(feedback)) {
+        if (critique && critique.justification) {
+          const correctStr = critique.correct ? 'CORRECT' : 'INCORRECT';
+          prompt += `  ${target}: ${correctStr} (answer=${critique.answer ?? '?'}, score=${critique.score ?? '?'}) — ${critique.justification}\n`;
+        }
+      }
+      prompt += '\n';
+    }
+    prompt += `</REVIEWER_FEEDBACK>\n\n`;
+  }
+  prompt += `COMBINING INSTRUCTIONS:\n\n`;
+  prompt += `1. IDENTIFY ALL DISTINCT ANSWERS across the solutions and reviewer feedback. List them.\n`;
+  prompt += `2. For each distinct answer, trace the logical chain that leads to it. Identify the KEY STEP where solutions diverge — the specific formula, counting argument, or computation that differs.\n`;
+  prompt += `3. For each divergence point, independently verify which approach is correct by re-deriving that step from first principles. Show your full working.\n`;
+  prompt += `4. Do NOT assume the majority answer is correct. A single solution with correct reasoning outweighs multiple solutions with the same error. Judge on mathematical merit alone.\n`;
+  prompt += `5. Do NOT favor any solution based on its source, label, length, or presentation style.\n`;
+  prompt += `6. Produce a single authoritative solution with every step fully justified. Show all mathematical work explicitly in LaTeX format.\n\n`;
   prompt += OUTPUT_INSTRUCTIONS;
   return prompt;
 }
 
 async function main() {
-  const problem = (await readStdin()).trim();
-  if (!problem) { log('[derive] No problem text provided on stdin'); process.exit(1); }
+  /* Accept question as CLI argument or via stdin. */
+  const cliQuestion = process.argv.slice(2).join(' ').trim();
+  const problem = cliQuestion || (await readStdin()).trim();
+  if (!problem) { log('[derive] No problem text provided. Usage: node solve.mjs "question" or echo "question" | node solve.mjs'); process.exit(1); }
 
-  const systemPrompt = `You are an expert mathematician. Solve this problem step by step with rigorous mathematical reasoning. Write your full solution showing all work — do not use code execution or external tools.\n\n${problem}\n${OUTPUT_INSTRUCTIONS}`;
+  const systemPrompt = `You are an expert mathematician. Solve this problem step by step with rigorous mathematical reasoning. Write your full solution showing all work — do not use code execution or external tools.
+
+IMPORTANT — DETAILED JUSTIFICATION REQUIRED:
+- For every claim, formula, or intermediate result, provide a detailed justification explaining WHY it is true.
+- When applying a theorem, identity, or counting principle, state it explicitly and verify that its preconditions hold.
+- When computing combinatorial quantities, probabilities, or sums, show the full enumeration or derivation — do not skip steps or assert results without proof.
+- When there are multiple cases, enumerate all of them explicitly and verify each one.
+- If you make a simplifying assumption, state it and justify why it is valid.
+- Double-check your final answer by verifying it with an independent method (e.g. compute the same quantity a different way, check boundary cases, or verify with small examples).
+
+${problem}
+${OUTPUT_INSTRUCTIONS}`;
   const startTime = Date.now();
   const agentNames = ['claude', 'codex', 'gemini'];
 
@@ -477,13 +543,14 @@ async function main() {
   let combinedContent = '';
   let converged = false;
   let critiqueRounds = 0;
+  let previousCritiques = null; /* Critique feedback from previous round, fed into combine. */
 
   for (let round = 0; round < MAX_CRITIQUE_ROUNDS; round++) {
     critiqueRounds = round + 1;
     const roundTrace = { round: round + 1, combine: {}, critiques: {}, refinements: {} };
 
-    /* --- Combine --- */
-    const combinePrompt = buildCombinePrompt(problem, activeResponses);
+    /* --- Combine (with previous round's critique feedback if available) --- */
+    const combinePrompt = buildCombinePrompt(problem, activeResponses, previousCritiques);
     log(`[derive] Round ${round + 1}: Combining via ${COMBINER_MODEL}...`);
     const combineStart = Date.now();
     const combineResult = await runClaude(combinePrompt, `combine-r${round + 1}`);
@@ -493,7 +560,17 @@ async function main() {
       contentLength: combinedContent.length,
       content: combinedContent,
     };
-    log(`[derive] Round ${round + 1}: Combined ${combinedContent.length} chars (${((Date.now() - combineStart) / 1000).toFixed(1)}s)`);
+    const combinedBoxed = extractBoxedAnswer(combinedContent);
+    log(`[derive] Round ${round + 1}: Combined ${combinedContent.length} chars (${((Date.now() - combineStart) / 1000).toFixed(1)}s) answer=${combinedBoxed ?? '?'}`);
+
+    /* Log answer agreement status. */
+    const answerMap = {};
+    for (const name of activeAgents) {
+      answerMap[name] = extractBoxedAnswer(activeResponses[name]) ?? '?';
+    }
+    answerMap['combined'] = combinedBoxed ?? '?';
+    const answerParts = Object.entries(answerMap).map(([k, v]) => `${k}=${v}`).join(', ');
+    log(`[derive] Round ${round + 1}: Answers: ${answerParts}`);
 
     /* --- Critique --- */
     log(`[derive] Round ${round + 1}: Critiquing (${activeAgents.length} reviewers in parallel)...`);
@@ -506,6 +583,7 @@ async function main() {
 
     const critiques = {};
     const combinedScores = [];
+    const combinedCorrectVotes = [];
     for (let i = 0; i < activeAgents.length; i++) {
       const name = activeAgents[i];
       const content = extractContent(critiqueResults[i]);
@@ -517,24 +595,31 @@ async function main() {
         parseFailed: true,
       };
 
-      /* Coerce scores from strings to numbers (models sometimes quote them). */
+      /* Coerce scores from strings to numbers and correct booleans. */
       if (parsed && parsed.combined) {
         for (const key of Object.keys(parsed)) {
-          if (parsed[key] && parsed[key].score !== undefined) {
-            parsed[key].score = Number(parsed[key].score);
+          if (parsed[key]) {
+            if (parsed[key].score !== undefined) parsed[key].score = Number(parsed[key].score);
+            if (typeof parsed[key].correct === 'string') parsed[key].correct = parsed[key].correct === 'true';
           }
         }
       }
       if (parsed && parsed.combined && typeof parsed.combined.score === 'number' && !isNaN(parsed.combined.score)) {
         critiques[name] = parsed;
         combinedScores.push(parsed.combined.score);
+        if (typeof parsed.combined.correct === 'boolean') {
+          combinedCorrectVotes.push(parsed.combined.correct);
+        }
         critiqueEntry.parsed = parsed;
         critiqueEntry.parseFailed = false;
 
-        /* Log all scores from this reviewer. */
+        /* Log all scores and correctness from this reviewer. */
         const parts = [];
         for (const target of [...activeAgents, 'combined']) {
-          if (parsed[target]) parts.push(`${target}=${parsed[target].score}`);
+          if (parsed[target]) {
+            const correctMark = parsed[target].correct === true ? 'Y' : parsed[target].correct === false ? 'N' : '?';
+            parts.push(`${target}=${parsed[target].score}(${correctMark})`);
+          }
         }
         log(`[derive] Round ${round + 1}: ${name} scores: ${parts.join(', ')} (${(critiqueResults[i].durationMs / 1000).toFixed(1)}s)`);
       } else {
@@ -546,17 +631,41 @@ async function main() {
     }
     roundTrace.critiqueDurationMs = critiqueDuration;
     roundTrace.combinedScores = combinedScores;
+    roundTrace.combinedCorrectVotes = combinedCorrectVotes;
     roundTrace.combinedScoreMean = combinedScores.length > 0
       ? combinedScores.reduce((a, b) => a + b, 0) / combinedScores.length : null;
 
     if (combinedScores.length > 0) {
       const mean = roundTrace.combinedScoreMean.toFixed(1);
-      log(`[derive] Round ${round + 1}: combined score mean=${mean}, scores=[${combinedScores.join(', ')}]`);
+      const correctCount = combinedCorrectVotes.filter(Boolean).length;
+      log(`[derive] Round ${round + 1}: combined score mean=${mean}, scores=[${combinedScores.join(', ')}], correct=${correctCount}/${combinedCorrectVotes.length}`);
     }
 
-    /* Check convergence (only after at least 1 full round). */
-    if (round >= 1 && combinedScores.length > 0) {
-      if (combinedScores.every((s) => s >= CONVERGENCE_SCORE)) {
+    /* Check convergence — can happen on any round including the first. */
+    {
+      /* Primary: all reviewers confirm the combined answer is correct. */
+      const allReviewersCorrect = combinedCorrectVotes.length > 0 && combinedCorrectVotes.every(Boolean);
+      if (allReviewersCorrect) {
+        log(`[derive] Converged after ${round + 1} rounds (all reviewers confirm combined answer correct)`);
+        converged = true;
+        trace.rounds.push(roundTrace);
+        break;
+      }
+
+      /* Secondary: answer agreement — all agents + combined agree on the boxed answer. */
+      const allAnswers = activeAgents.map((n) => extractBoxedAnswer(activeResponses[n])).filter(Boolean);
+      const combinedAnswer = extractBoxedAnswer(combinedContent);
+      if (combinedAnswer) allAnswers.push(combinedAnswer);
+      const uniqueAnswers = new Set(allAnswers);
+      if (allAnswers.length >= 2 && uniqueAnswers.size === 1) {
+        log(`[derive] Converged after ${round + 1} rounds (all answers agree: \\boxed{${combinedAnswer}})`);
+        converged = true;
+        trace.rounds.push(roundTrace);
+        break;
+      }
+
+      /* Tertiary: score-based convergence. */
+      if (combinedScores.length > 0 && combinedScores.every((s) => s >= CONVERGENCE_SCORE)) {
         log(`[derive] Converged after ${round + 1} rounds (all scores >= ${CONVERGENCE_SCORE})`);
         converged = true;
         trace.rounds.push(roundTrace);
@@ -578,7 +687,12 @@ async function main() {
         const scores = [];
         for (const [reviewer, critique] of Object.entries(critiques)) {
           if (critique[name] && typeof critique[name].score === 'number') {
-            scores.push({ reviewer, score: critique[name].score, feedback: critique[name].feedback || '' });
+            scores.push({
+              reviewer,
+              score: critique[name].score,
+              correct: critique[name].correct,
+              feedback: critique[name].justification || critique[name].feedback || '',
+            });
           }
         }
         return runClaude(
@@ -602,6 +716,10 @@ async function main() {
       }
     }
     roundTrace.refineDurationMs = Date.now() - refineStart;
+
+    /* Save critique feedback for next round's combine step. */
+    previousCritiques = critiques;
+
     trace.rounds.push(roundTrace);
   }
 
