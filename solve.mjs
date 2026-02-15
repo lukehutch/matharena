@@ -18,14 +18,20 @@ const GEMINI_MODEL = process.env.DERIVE_GEMINI_MODEL ?? 'gemini-3-pro-preview';
 const COMBINER_MODEL = process.env.DERIVE_ORCHESTRATOR_MODEL_FAST ?? 'claude-sonnet-4-5';
 const MAX_CRITIQUE_ROUNDS = parseInt(process.env.DERIVE_MAX_CRITIQUE_ROUNDS ?? '7', 10);
 const CONVERGENCE_SCORE = 95;
-const AGENT_TIMEOUT_MS = parseInt(process.env.DERIVE_AGENT_TIMEOUT_MS ?? '300000', 10); /* 5 min per agent call */
+const AGENT_TIMEOUT_MS = parseInt(process.env.DERIVE_AGENT_TIMEOUT_MS ?? '1500000', 10); /* 25 min per agent call */
 
 /** Fallback models for rate-limit recovery. */
 const FALLBACKS = {
   'claude-opus-4-6': 'claude-sonnet-4-5',
   'claude-sonnet-4-5': 'claude-haiku-4-5',
-  'gpt-5.3-codex': 'o3',
+  'gpt-5.3-codex': 'gpt-5.1-codex-mini',
   'gemini-3-pro-preview': 'gemini-3-flash-preview',
+};
+
+/** Max supported reasoning effort per Codex model. */
+const CODEX_MAX_EFFORT = {
+  'gpt-5.3-codex': 'xhigh',
+  'gpt-5.1-codex-mini': 'high',
 };
 
 /** Check whether agent output indicates a rate-limit / quota error. */
@@ -133,9 +139,11 @@ function claudeArgs(model) {
 }
 
 function codexArgs(model) {
+  const effort = CODEX_MAX_EFFORT[model] ?? 'high';
   return [
     'exec', '--json', '--sandbox', 'read-only', '--skip-git-repo-check',
-    '-m', model, '-C', '/tmp',
+    '-m', model, '-c', `model_reasoning_effort="${effort}"`,
+    '-C', '/tmp',
   ];
 }
 
@@ -340,31 +348,39 @@ function extractJson(text) {
 function buildCritiquePrompt(problem, agentResponses, combinedResponse, round) {
   const agentNames = Object.keys(agentResponses);
   const targetNames = [...agentNames, 'combined'];
-  let prompt = `You are a rigorous mathematical reviewer. Your job is to independently verify each solution to the following problem.\n\n`;
+  let prompt = `You are a rigorous mathematical reviewer. Your job is to independently verify each solution to the following problem using Chain-of-Verification.\n\n`;
   prompt += `<PROBLEM>\n${problem}\n</PROBLEM>\n\n`;
   for (const name of agentNames) {
     prompt += `<SOLUTION agent="${name}">\n${agentResponses[name]}\n</SOLUTION>\n\n`;
   }
   prompt += `<COMBINED_SOLUTION>\n${combinedResponse}\n</COMBINED_SOLUTION>\n\n`;
   prompt += `CRITIQUE ROUND: ${round}\n\n`;
-  prompt += `INSTRUCTIONS:\n\n`;
-  prompt += `STEP 1 — SOLVE INDEPENDENTLY FIRST:\n`;
-  prompt += `Before reading the solutions in detail, work through the problem yourself from scratch.\n`;
-  prompt += `Show your complete independent solution with all steps justified.\n`;
-  prompt += `Arrive at your own answer before comparing with any of the submitted solutions.\n\n`;
-  prompt += `STEP 2 — COMPARE AND VERIFY EACH SOLUTION:\n`;
-  prompt += `Now compare each solution against your own independent work.\n`;
-  prompt += `For each solution, trace through every logical step and computation:\n`;
-  prompt += `- Verify each formula, identity, or counting argument is correctly applied\n`;
-  prompt += `- Check that case enumerations are exhaustive and non-overlapping\n`;
-  prompt += `- Verify all arithmetic and algebraic manipulations step by step\n`;
-  prompt += `- If a solution disagrees with your independent answer, carefully determine which is correct by re-deriving the disputed step in detail\n\n`;
+
+  prompt += `You MUST follow the Chain-of-Verification protocol below. Complete each phase in order.\n\n`;
+
+  prompt += `═══════════════════════════════════════════════════════════════\n`;
+  prompt += `PHASE 1 — CRITIQUE PLAN & BASELINE VERIFICATION QUESTIONS\n`;
+  prompt += `═══════════════════════════════════════════════════════════════\n\n`;
+  prompt += `Before evaluating any solution, prepare your verification framework:\n\n`;
+  prompt += `A. SOLVE INDEPENDENTLY: Work through the problem yourself from scratch. Show your complete solution with all steps justified. Arrive at your own answer.\n\n`;
+  prompt += `B. GENERATE VERIFICATION QUESTIONS: Based on your independent solution, formulate specific verification questions that any correct solution must answer. For example:\n`;
+  prompt += `   - "Does the solution correctly identify all cases? (list them)"\n`;
+  prompt += `   - "Is the key formula/identity applied with valid preconditions?"\n`;
+  prompt += `   - "Does the arithmetic in step X check out? (show independent calculation)"\n`;
+  prompt += `   - "Is the counting argument exhaustive and non-overlapping?"\n`;
+  prompt += `   - "Does the final answer match an independent verification method?"\n`;
+  prompt += `   List 3-7 verification questions specific to this problem.\n\n`;
+  prompt += `C. COMPARE EACH SOLUTION against your verification questions. For each solution, answer every question, tracing through the logical steps and computations.\n\n`;
+
   prompt += `ANTI-BIAS WARNING:\n`;
   prompt += `You MUST NOT be biased toward or against any particular solution based on its source, length, style, or confidence of presentation.\n`;
   prompt += `A longer or more detailed solution is NOT necessarily more correct.\n`;
   prompt += `A solution labeled "combined" is NOT necessarily better than individual solutions.\n`;
   prompt += `Judge ONLY on mathematical correctness. If a minority solution has the right answer and the majority is wrong, say so.\n\n`;
-  prompt += `STEP 3 — SCORE EACH SOLUTION:\n`;
+
+  prompt += `═══════════════════════════════════════════════════════════════\n`;
+  prompt += `PHASE 2 — EVALUATE AND SCORE\n`;
+  prompt += `═══════════════════════════════════════════════════════════════\n\n`;
   prompt += `For each solution, declare:\n`;
   prompt += `   - "correct": true/false — is the final answer correct and the reasoning sound?\n`;
   prompt += `   - "answer": the extracted \\boxed{} value\n`;
@@ -372,19 +388,28 @@ function buildCritiquePrompt(problem, agentResponses, combinedResponse, round) {
   prompt += `     100 = correct final answer (even if working is imperfect or verbose)\n`;
   prompt += `     50-99 = approach is sound but you cannot fully verify the answer\n`;
   prompt += `     0-49 = final answer is wrong or contains a fatal mathematical error\n`;
-  prompt += `   - "justification": detailed reasoning for the score — walk through the key steps of the solution and explain specifically which are correct and which (if any) contain errors. Cite the exact step where an error occurs and show the correct calculation.\n`;
+  prompt += `   - "justification": detailed reasoning for the score — walk through which verification questions passed/failed, cite the exact step where an error occurs, and show the correct calculation.\n`;
   prompt += `   Do NOT penalize correct answers for stylistic issues or suboptimal working.\n\n`;
+
+  prompt += `═══════════════════════════════════════════════════════════════\n`;
+  prompt += `PHASE 3 — RECOMMENDATION\n`;
+  prompt += `═══════════════════════════════════════════════════════════════\n\n`;
+  prompt += `Based on your verification, make a recommendation:\n`;
+  prompt += `   - "accept": true if the combined solution's final answer is correct and should be accepted as optimal. false if another round of refinement is needed.\n`;
+  prompt += `   - "recommendation": a brief explanation. If accept=false, explain what specifically needs to be fixed or re-derived in the next round.\n\n`;
+
   const exampleObj = {};
   for (const name of targetNames) {
     exampleObj[name] = { answer: '<extracted boxed value>', correct: '<true/false>', score: '<0-100>', justification: '<your reasoning>' };
   }
+  exampleObj['_recommendation'] = { accept: '<true/false>', recommendation: '<explanation>' };
   prompt += `Respond with ONLY a JSON object:\n`;
   prompt += JSON.stringify(exampleObj, null, 2) + '\n';
   return prompt;
 }
 
 /** Build refinement prompt. */
-function buildRefinementPrompt(problem, agentName, previousResponse, scores, consensusResponse, round) {
+function buildRefinementPrompt(problem, agentName, previousResponse, scores, consensusResponse, round, recommendations = []) {
   let prompt = `You are an expert mathematician refining your solution.\n\n`;
   prompt += `<PROBLEM>\n${problem}\n</PROBLEM>\n\n`;
   prompt += `YOUR PREVIOUS RESPONSE:\n${previousResponse}\n\n`;
@@ -396,12 +421,21 @@ function buildRefinementPrompt(problem, agentName, previousResponse, scores, con
     }
     prompt += '\n';
   }
+  if (recommendations.length > 0) {
+    prompt += `REVIEWER RECOMMENDATIONS:\n`;
+    for (const r of recommendations) {
+      const acceptStr = r.accept ? 'ACCEPT' : 'NEEDS REVISION';
+      prompt += `  ${r.reviewer}: ${acceptStr} — ${r.recommendation}\n`;
+    }
+    prompt += '\n';
+  }
   prompt += `CURRENT CONSENSUS RESPONSE:\n${consensusResponse}\n\n`;
   prompt += `REFINEMENT ROUND: ${round + 1}\n\n`;
   prompt += `Produce a solution that is BETTER than the consensus response. `;
   prompt += `Correct any errors, fill any gaps, and improve rigor. `;
   prompt += `For every claim and intermediate result, provide a detailed justification explaining WHY it is true. `;
   prompt += `If reviewers flagged an error, re-derive that step from scratch and show the correct computation. `;
+  prompt += `Pay close attention to the reviewer recommendations above — they identify what specifically needs fixing. `;
   prompt += `Show all mathematical work explicitly in LaTeX format — do not use code execution.`;
   prompt += OUTPUT_INSTRUCTIONS;
   return prompt;
@@ -584,6 +618,7 @@ ${OUTPUT_INSTRUCTIONS}`;
     const critiques = {};
     const combinedScores = [];
     const combinedCorrectVotes = [];
+    const acceptVotes = [];
     for (let i = 0; i < activeAgents.length; i++) {
       const name = activeAgents[i];
       const content = extractContent(critiqueResults[i]);
@@ -601,6 +636,7 @@ ${OUTPUT_INSTRUCTIONS}`;
           if (parsed[key]) {
             if (parsed[key].score !== undefined) parsed[key].score = Number(parsed[key].score);
             if (typeof parsed[key].correct === 'string') parsed[key].correct = parsed[key].correct === 'true';
+            if (typeof parsed[key].accept === 'string') parsed[key].accept = parsed[key].accept === 'true';
           }
         }
       }
@@ -609,6 +645,12 @@ ${OUTPUT_INSTRUCTIONS}`;
         combinedScores.push(parsed.combined.score);
         if (typeof parsed.combined.correct === 'boolean') {
           combinedCorrectVotes.push(parsed.combined.correct);
+        }
+        /* Extract Phase 3 recommendation. */
+        const rec = parsed._recommendation;
+        if (rec) {
+          if (typeof rec.accept === 'string') rec.accept = rec.accept === 'true';
+          if (typeof rec.accept === 'boolean') acceptVotes.push(rec.accept);
         }
         critiqueEntry.parsed = parsed;
         critiqueEntry.parseFailed = false;
@@ -621,7 +663,8 @@ ${OUTPUT_INSTRUCTIONS}`;
             parts.push(`${target}=${parsed[target].score}(${correctMark})`);
           }
         }
-        log(`[derive] Round ${round + 1}: ${name} scores: ${parts.join(', ')} (${(critiqueResults[i].durationMs / 1000).toFixed(1)}s)`);
+        const acceptMark = rec?.accept === true ? ' accept=Y' : rec?.accept === false ? ' accept=N' : '';
+        log(`[derive] Round ${round + 1}: ${name} scores: ${parts.join(', ')}${acceptMark} (${(critiqueResults[i].durationMs / 1000).toFixed(1)}s)`);
       } else {
         log(`[derive] Round ${round + 1}: ${name} critique parse FAILED (${(critiqueResults[i].durationMs / 1000).toFixed(1)}s)`);
         log(`[derive]   raw critique (${content.length} chars): ${content.slice(0, 400)}`);
@@ -632,18 +675,31 @@ ${OUTPUT_INSTRUCTIONS}`;
     roundTrace.critiqueDurationMs = critiqueDuration;
     roundTrace.combinedScores = combinedScores;
     roundTrace.combinedCorrectVotes = combinedCorrectVotes;
+    roundTrace.acceptVotes = acceptVotes;
     roundTrace.combinedScoreMean = combinedScores.length > 0
       ? combinedScores.reduce((a, b) => a + b, 0) / combinedScores.length : null;
 
     if (combinedScores.length > 0) {
       const mean = roundTrace.combinedScoreMean.toFixed(1);
       const correctCount = combinedCorrectVotes.filter(Boolean).length;
-      log(`[derive] Round ${round + 1}: combined score mean=${mean}, scores=[${combinedScores.join(', ')}], correct=${correctCount}/${combinedCorrectVotes.length}`);
+      const acceptCount = acceptVotes.filter(Boolean).length;
+      log(`[derive] Round ${round + 1}: combined score mean=${mean}, scores=[${combinedScores.join(', ')}], correct=${correctCount}/${combinedCorrectVotes.length}, accept=${acceptCount}/${acceptVotes.length}`);
     }
 
     /* Check convergence — can happen on any round including the first. */
     {
-      /* Primary: all reviewers confirm the combined answer is correct. */
+      /* Primary: majority of reviewers recommend accepting the combined answer.
+       * Ties go to accept — the consensus result gets priority when votes are split. */
+      const acceptCount = acceptVotes.filter(Boolean).length;
+      const majorityAccept = acceptVotes.length > 0 && acceptCount * 2 >= acceptVotes.length;
+      if (majorityAccept) {
+        log(`[derive] Converged after ${round + 1} rounds (${acceptCount}/${acceptVotes.length} reviewers recommend accept)`);
+        converged = true;
+        trace.rounds.push(roundTrace);
+        break;
+      }
+
+      /* Secondary: all reviewers confirm the combined answer is correct. */
       const allReviewersCorrect = combinedCorrectVotes.length > 0 && combinedCorrectVotes.every(Boolean);
       if (allReviewersCorrect) {
         log(`[derive] Converged after ${round + 1} rounds (all reviewers confirm combined answer correct)`);
@@ -652,7 +708,7 @@ ${OUTPUT_INSTRUCTIONS}`;
         break;
       }
 
-      /* Secondary: answer agreement — all agents + combined agree on the boxed answer. */
+      /* Tertiary: answer agreement — all agents + combined agree on the boxed answer. */
       const allAnswers = activeAgents.map((n) => extractBoxedAnswer(activeResponses[n])).filter(Boolean);
       const combinedAnswer = extractBoxedAnswer(combinedContent);
       if (combinedAnswer) allAnswers.push(combinedAnswer);
@@ -664,7 +720,7 @@ ${OUTPUT_INSTRUCTIONS}`;
         break;
       }
 
-      /* Tertiary: score-based convergence. */
+      /* Quaternary: score-based convergence. */
       if (combinedScores.length > 0 && combinedScores.every((s) => s >= CONVERGENCE_SCORE)) {
         log(`[derive] Converged after ${round + 1} rounds (all scores >= ${CONVERGENCE_SCORE})`);
         converged = true;
@@ -678,6 +734,19 @@ ${OUTPUT_INSTRUCTIONS}`;
       log(`[derive] Max rounds (${MAX_CRITIQUE_ROUNDS}) reached`);
       trace.rounds.push(roundTrace);
       break;
+    }
+
+    /* Collect reviewer recommendations for refinement prompts. */
+    const recommendations = [];
+    for (const [reviewer, critique] of Object.entries(critiques)) {
+      const rec = critique._recommendation;
+      if (rec && typeof rec.recommendation === 'string') {
+        recommendations.push({
+          reviewer,
+          accept: rec.accept === true,
+          recommendation: rec.recommendation,
+        });
+      }
     }
 
     log(`[derive] Round ${round + 1}: Refining (${activeAgents.length} agents in parallel)...`);
@@ -696,7 +765,7 @@ ${OUTPUT_INSTRUCTIONS}`;
           }
         }
         return runClaude(
-          buildRefinementPrompt(problem, name, activeResponses[name], scores, combinedContent, round),
+          buildRefinementPrompt(problem, name, activeResponses[name], scores, combinedContent, round, recommendations),
           `refine-${name}-r${round + 1}`,
         );
       })
